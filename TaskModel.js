@@ -52,6 +52,20 @@ function normalizeTasks(tasks) {
   return result
 }
 
+// Case-insensitive keyword filter for the keyboard "/" search: every
+// whitespace-separated word must appear in the title, description, calendar
+// name or a category. An empty query returns the list untouched.
+function filterTasks(tasks, query) {
+  var words = String(query == null ? '' : query).toLowerCase().split(/\s+/).filter(function(word) { return word !== '' })
+  if (!Array.isArray(tasks) || words.length === 0) return tasks
+  return tasks.filter(function(task) {
+    if (!task) return false
+    var haystack = [task.title, task.description, task.calendarName, (task.categories || []).join(' ')].join(' ').toLowerCase()
+    for (var i = 0; i < words.length; i++) if (haystack.indexOf(words[i]) < 0) return false
+    return true
+  })
+}
+
 function isOverdue(task, now) {
   if (!task || !task.due) return false
   if (task.status === 'COMPLETED') return false
@@ -306,6 +320,7 @@ if (typeof module !== 'undefined') module.exports = {
   upcomingTaskCount,
   normalizeTasks,
   normalizedTask,
+  filterTasks,
   parseHelperResponse,
   formatDueDate,
   formatCompletedDate,

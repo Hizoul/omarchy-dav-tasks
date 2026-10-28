@@ -27,6 +27,20 @@ assert.equal(model.normalizeTasks([{ id: '1', title: 'A' }, { id: '2', title: 'B
 assert.equal(model.normalizeTasks([{ id: '1', title: 'A' }, { title: 'No id' }]).length, 1)
 assert.equal(model.normalizeTasks([{ id: '1', title: 'A' }, { id: '2', title: 'B' }])[0].id, '1')
 
+// filterTasks
+const filterSample = [
+  { title: 'Buy milk', description: 'oat drink', calendarName: 'Home', categories: ['errands'] },
+  { title: 'Write report', description: '', calendarName: 'Work', categories: ['office', 'urgent'] }
+]
+assert.equal(model.filterTasks(filterSample, '').length, 2)
+assert.equal(model.filterTasks(filterSample, '   ').length, 2)
+assert.equal(model.filterTasks(filterSample, 'MILK').length, 1)
+assert.equal(model.filterTasks(filterSample, 'oat').length, 1)
+assert.equal(model.filterTasks(filterSample, 'work report').length, 1)
+assert.equal(model.filterTasks(filterSample, 'urgent').length, 1)
+assert.equal(model.filterTasks(filterSample, 'milk report').length, 0)
+assert.deepEqual(model.filterTasks(null, 'x'), null)
+
 // isOverdue
 assert.equal(model.isOverdue(null), false)
 assert.equal(model.isOverdue({}), false)

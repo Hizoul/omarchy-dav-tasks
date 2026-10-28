@@ -15,6 +15,29 @@ A task widget for the Omarchy shell. Sync with Nextcloud Tasks and manage your t
 omarchy plugin add https://github.com/enkeli/omarchy-dav-tasks --enable
 ```
 
+## Keyboard
+
+Everything works without the mouse. Press `?` (or `F1`) in the panel for a searchable list of every shortcut; it also lets you rebind them. Defaults mix vim keys with arrow keys:
+
+| Key | Action |
+| --- | --- |
+| `j` `k` / `Down` `Up` | Move the cursor (crosses pages and sections) |
+| `g` `G` / `Home` `End` | First / last task |
+| `h` `l` / `Left` `Right` / `PageUp` `PageDown` | Previous / next page |
+| `x` / `Space` | Complete or reopen the task |
+| `Enter` / `o` | Show or hide details |
+| `d` / `Delete` | Delete (press twice within 4 seconds) |
+| `a` / `n` | New task |
+| `/` | Filter tasks |
+| `1` `2` `3` / `[` `]` | Pending, Done, Config tabs |
+| `r` | Sync |
+| `Esc` | Back out one step, then close the panel |
+| `Tab` | Next field in forms, otherwise the next bar panel |
+
+In the new-task form: `Tab` / `Shift+Tab` move between fields, `Ctrl+Enter` creates the task, `Ctrl+D` opens the due-date picker (`h j k l` move by day and week, `H` `L` by month, `t` today, `Enter` picks, `x` clears), `Ctrl+J` / `Ctrl+K` cycle calendars and `Ctrl+L` opens the calendar list. In Config: `Enter` toggles a calendar, `c` picks its color, `s` connects a server.
+
+To rebind, open `?`, highlight an action, press `Ctrl+E` and then the new key. `Ctrl+R` restores one default, `Ctrl+U` unbinds and `Ctrl+Shift+R` (twice) restores all. Bindings are stored in this widget's `shell.json` entry under `keyboardShortcuts`.
+
 ## What it does
 
 - View and manage Nextcloud Tasks lists

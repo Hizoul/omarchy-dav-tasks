@@ -23,15 +23,52 @@ Column {
   // Servers section in the config tab.
   readonly property var serverConnections: TaskModel.serverConnections(calendarService ? calendarService.calendars : [])
 
-  // True while the add-task view owns keyboard input (text fields focused,
-  // calendar dropdown popup open, due-date picker open). Panel.qml binds the
-  // key catcher's `blocked` to this so typing reaches the form.
-  readonly property bool formEditing: activeTab === "add" && (
-    addSummaryField.activeFocus
+  // --- Keyboard model ---------------------------------------------------
+  // Panel.qml owns the key dispatcher and the help overlay; this view owns
+  // the cursor and every action a key can trigger (performAction). Contexts
+  // match the registry in Keybindings.js.
+
+  // Pending/Done list filter ("/"). The field doubles as the applied filter:
+  // it stays visible while it has text, even after it loses focus.
+  readonly property string filterText: filterField.text
+  readonly property bool filterActive: filterText.trim() !== ""
+  property bool filterOpen: false
+
+  // Task cursor: which section on the active list tab, and which row of the
+  // page that section currently shows. Config tab uses configIndex instead.
+  property int cursorSection: 0
+  property int cursorRow: 0
+  property int configIndex: 0
+  // Color palette popup currently open on a config row (null when closed).
+  property var activePalette: null
+
+  readonly property var navSections: activeTab === "pending" ? [upcomingSection, backlogSection]
+    : activeTab === "done" ? [doneSection] : []
+
+  // Text fields consume some Ctrl chords themselves (Ctrl+D deletes, Ctrl+K
+  // kills the line), which would never reach an ancestor's handler. Each field
+  // forwards its keys to the panel's dispatcher first; plain typing is left
+  // unaccepted there and falls back to the field.
+  readonly property var keyForward: panel && panel.keyCatcherItem ? [panel.keyCatcherItem] : []
+
+  // A text field has focus: plain keys must reach it instead of the cursor.
+  readonly property bool textEditing: filterField.activeFocus
+    || addSummaryField.activeFocus
     || addDescriptionField.activeFocus
     || addCategoryField.activeFocus
-    || addCalendarDropdown.popupOpen
-    || addDueGrid.popupOpen)
+    || caldavUrlField.activeFocus
+    || caldavUsernameField.activeFocus
+    || caldavPasswordField.activeFocus
+
+  // The shared Dropdown popup runs its own list navigation.
+  readonly property bool modalBlocked: addCalendarDropdown.popupOpen
+
+  readonly property string keyContext: {
+    if (activePalette) return "palette"
+    if (activeTab === "add") return addTaskView.duePickerOpen ? "picker" : "form"
+    if (activeTab === "config") return "config"
+    return "list"
+  }
 
   // Direct binding to taskService.allTasks - this should update when the property changes
   readonly property var allTasks: taskService ? taskService.allTasks : []
@@ -60,6 +97,308 @@ Column {
     if (calendarService && calendarService.caldavSetupStatus === "success") {
       calendarService.resetCaldavSetup()
     }
+  }
+
+  function openCaldavForm() {
+    debugLog("action: open caldav form")
+    caldavForm.visible = true
+    Qt.callLater(function() { caldavUrlField.forceActiveFocus() })
+  }
+
+  function submitCaldav() {
+    if (!calendarService || calendarService.caldavSetupStatus === "connecting") return
+    debugLog("action: caldav connect " + sanitizeUrl(caldavUrlField.text))
+    calendarService.setupCaldav("", caldavUrlField.text, caldavUsernameField.text, caldavPasswordField.text)
+  }
+
+  // --- Keyboard actions ---------------------------------------------------
+
+  function focusPanel() {
+    if (panel && typeof panel.focusKeyCatcher === "function") panel.focusKeyCatcher()
+  }
+
+  // Scroll the panel so a cursor target is on screen (rows can sit below the
+  // fold when details are expanded or the add form is tall).
+  function reveal(item) {
+    if (item && panel && typeof panel.revealItem === "function") panel.revealItem(item)
+  }
+
+  // Reveal after layout settles; owned by the view (not a delegate) so a
+  // row rebuilt in between can't leave a dangling callback.
+  function revealCurrent() {
+    var item = keyContext === "list" ? currentItem() : null
+    if (item) reveal(item)
+  }
+
+  function scheduleReveal() { Qt.callLater(revealCurrent) }
+
+  onCursorRowChanged: scheduleReveal()
+  onCursorSectionChanged: scheduleReveal()
+
+  function formStep(direction) { addTaskView.formStep(direction) }
+
+  function sectionRows(section) {
+    return section ? section.pageTasks.length : 0
+  }
+
+  // Keep the cursor on a real row after the model, filter or page changed.
+  function clampCursor() {
+    var sections = navSections
+    if (sections.length === 0) return
+    cursorSection = Math.max(0, Math.min(cursorSection, sections.length - 1))
+    if (sectionRows(sections[cursorSection]) === 0) {
+      for (var i = 0; i < sections.length; i++) {
+        if (sectionRows(sections[i]) > 0) { cursorSection = i; break }
+      }
+    }
+    var rows = sectionRows(sections[cursorSection])
+    cursorRow = rows === 0 ? 0 : Math.max(0, Math.min(cursorRow, rows - 1))
+  }
+
+  function resetCursor() {
+    cursorSection = 0
+    cursorRow = 0
+    configIndex = 0
+    Qt.callLater(clampCursor)
+  }
+
+  function currentSection() {
+    var sections = navSections
+    return sections.length > 0 ? sections[Math.max(0, Math.min(cursorSection, sections.length - 1))] : null
+  }
+
+  function currentItem() {
+    var section = currentSection()
+    return section ? section.rowItem(cursorRow) : null
+  }
+
+  function moveCursor(dy) {
+    if (activeTab === "config") { moveConfig(dy); return }
+    var sections = navSections
+    if (sections.length === 0) return
+    clampCursor()
+    var section = sections[cursorSection]
+    var rows = sectionRows(section)
+    var target = cursorRow + dy
+    if (target >= 0 && target < rows) { cursorRow = target; return }
+    if (dy > 0) {
+      // Past the last row: next page of this section, then the next section.
+      if (section.currentPage < section.pageCount) {
+        section.page = section.currentPage + 1
+        cursorRow = 0
+        return
+      }
+      for (var i = cursorSection + 1; i < sections.length; i++) {
+        if (sectionRows(sections[i]) > 0) { cursorSection = i; cursorRow = 0; return }
+      }
+    } else {
+      if (section.currentPage > 1) {
+        section.page = section.currentPage - 1
+        cursorRow = sectionRows(section) - 1
+        return
+      }
+      for (var j = cursorSection - 1; j >= 0; j--) {
+        var count = sectionRows(sections[j])
+        if (count > 0) { cursorSection = j; cursorRow = count - 1; return }
+      }
+    }
+  }
+
+  function jumpCursor(toEnd) {
+    if (activeTab === "config") { configIndex = toEnd ? configCount - 1 : 0; revealConfig(); return }
+    var sections = navSections
+    var order = []
+    for (var i = 0; i < sections.length; i++) if (sectionRows(sections[i]) > 0 || sections[i].tasks.length > 0) order.push(i)
+    if (order.length === 0) return
+    var index = toEnd ? order[order.length - 1] : order[0]
+    var section = sections[index]
+    section.page = toEnd ? section.pageCount : 1
+    cursorSection = index
+    cursorRow = toEnd ? Math.max(0, sectionRows(section) - 1) : 0
+  }
+
+  function movePage(delta) {
+    var section = currentSection()
+    if (!section) return
+    var next = section.currentPage + delta
+    if (next < 1 || next > section.pageCount) return
+    section.page = next
+    clampCursor()
+  }
+
+  function cycleTab(delta) {
+    var tabs = ["pending", "done", "config"]
+    var index = tabs.indexOf(activeTab)
+    activeTab = tabs[((index < 0 ? 0 : index) + delta + tabs.length) % tabs.length]
+  }
+
+  function openFilter() {
+    filterOpen = true
+    Qt.callLater(function() { filterField.forceActiveFocus() })
+  }
+
+  function clearFilter() {
+    filterField.text = ""
+    filterOpen = false
+    Qt.callLater(clampCursor)
+  }
+
+  // --- Config tab cursor ---
+  // Rows are the calendars, then Connect Server (while its form is closed),
+  // the debug toggle and, with debug on, Clear logs.
+  readonly property int calendarCount: calendarService && calendarService.calendars ? calendarService.calendars.length : 0
+  readonly property bool debugOn: calendarService ? calendarService.debugMode : false
+  readonly property var configKinds: {
+    var kinds = []
+    if (!caldavForm.visible) kinds.push("connect")
+    kinds.push("debug")
+    if (debugOn) kinds.push("clearLogs")
+    return kinds
+  }
+  readonly property int configCount: calendarCount + configKinds.length
+  readonly property string configCursorKind: {
+    if (activeTab !== "config") return ""
+    var index = Math.max(0, Math.min(configIndex, configCount - 1))
+    return index < calendarCount ? "calendar" : configKinds[index - calendarCount]
+  }
+
+  function moveConfig(dy) {
+    if (configCount === 0) return
+    configIndex = Math.max(0, Math.min(configIndex + dy, configCount - 1))
+    revealConfig()
+  }
+
+  function configRow(index) {
+    return index >= 0 && index < calendarCount ? calendarRows.itemAt(index) : null
+  }
+
+  function revealConfig() {
+    var index = Math.max(0, Math.min(configIndex, configCount - 1))
+    var kind = configCursorKind
+    var item = kind === "calendar" ? configRow(index)
+      : kind === "connect" ? connectServerButton
+      : kind === "debug" ? debugToggle
+      : kind === "clearLogs" ? clearLogsButton : null
+    Qt.callLater(function() { reveal(item) })
+  }
+
+  function activateConfig() {
+    var kind = configCursorKind
+    if (kind === "calendar") {
+      var row = configRow(Math.min(configIndex, calendarCount - 1))
+      if (row) row.toggleEnabled()
+    } else if (kind === "connect") {
+      openCaldavForm()
+    } else if (kind === "debug") {
+      toggleDebugMode()
+    } else if (kind === "clearLogs") {
+      if (calendarService) calendarService.clearDebugLog()
+    }
+  }
+
+  function toggleDebugMode() {
+    var next = !(calendarService && calendarService.debugMode)
+    if (calendarService) calendarService.debugMode = next
+    if (panel) panel.persistSettings({ debug: next })
+    debugLog("action: toggle debug mode -> " + next)
+  }
+
+  // Esc peels one layer at a time; returns false when nothing was left to
+  // close, which tells Panel.qml to close the panel itself.
+  function handleEscape() {
+    if (activePalette) { activePalette.closePalette(); return true }
+    if (activeTab === "add") {
+      if (addTaskView.duePickerOpen) {
+        addTaskView.closeDuePicker()
+        return true
+      }
+      addTaskView.escapeAdd()
+      return true
+    }
+    if (filterField.activeFocus) {
+      filterField.focus = false
+      focusPanel()
+      return true
+    }
+    if (caldavForm.visible) {
+      closeCaldavForm()
+      focusPanel()
+      return true
+    }
+    if (filterActive || filterOpen) { clearFilter(); return true }
+    if (activeTab !== "pending") { activeTab = "pending"; return true }
+    return false
+  }
+
+  // Run a registry action (see Keybindings.js). Returns true when handled.
+  function performAction(id) {
+    var item = null
+    switch (id) {
+    case "help": if (panel) panel.openHelp(); return true
+    case "sync": if (panel) panel.refresh(); return true
+    case "addTask": activeTab = "add"; return true
+    case "tabPending": activeTab = "pending"; return true
+    case "tabDone": activeTab = "done"; return true
+    case "tabConfig": activeTab = "config"; return true
+    case "tabNext": cycleTab(1); return true
+    case "tabPrev": cycleTab(-1); return true
+    case "cursorDown": moveCursor(1); return true
+    case "cursorUp": moveCursor(-1); return true
+    case "cursorTop": jumpCursor(false); return true
+    case "cursorBottom": jumpCursor(true); return true
+    case "pagePrev": movePage(-1); return true
+    case "pageNext": movePage(1); return true
+    case "filter": openFilter(); return true
+    case "toggleExpand":
+      item = currentItem()
+      if (item) item.toggleExpanded()
+      return true
+    case "toggleComplete":
+      item = currentItem()
+      if (item) item.toggleComplete()
+      return true
+    case "deleteTask":
+      item = currentItem()
+      if (item) item.requestDelete()
+      return true
+    case "configActivate": activateConfig(); return true
+    case "configColor":
+      if (configCursorKind === "calendar") {
+        var row = configRow(Math.min(configIndex, calendarCount - 1))
+        if (row) row.openPalette()
+      }
+      return true
+    case "connectServer": openCaldavForm(); return true
+    case "formSubmit": addTaskView.trySubmit(); return true
+    case "formPickDue": addTaskView.toggleDuePicker(); return true
+    case "formCalendarPopup": addCalendarDropdown.open(); return true
+    case "formCalendarNext": addTaskView.stepCalendar(1); return true
+    case "formCalendarPrev": addTaskView.stepCalendar(-1); return true
+    case "pickerLeft": addDueGrid.moveDays(-1); return true
+    case "pickerRight": addDueGrid.moveDays(1); return true
+    case "pickerUp": addDueGrid.moveDays(-7); return true
+    case "pickerDown": addDueGrid.moveDays(7); return true
+    case "pickerPrevMonth": addDueGrid.moveMonths(-1); return true
+    case "pickerNextMonth": addDueGrid.moveMonths(1); return true
+    case "pickerToday": addDueGrid.cursorToday(); return true
+    case "pickerSelect": addDueGrid.pickCursor(); return true
+    case "pickerClear":
+      addTaskView.clearDueDate()
+      addTaskView.closeDuePicker()
+      return true
+    case "palettePrev": if (activePalette) activePalette.movePalette(-1); return true
+    case "paletteNext": if (activePalette) activePalette.movePalette(1); return true
+    case "paletteSelect": if (activePalette) activePalette.pickPalette(); return true
+    }
+    return false
+  }
+
+  onFilterTextChanged: Qt.callLater(clampCursor)
+  onCalendarCountChanged: Qt.callLater(clampConfig)
+  onConfigCountChanged: Qt.callLater(clampConfig)
+
+  function clampConfig() {
+    configIndex = Math.max(0, Math.min(configIndex, Math.max(0, configCount - 1)))
   }
 
   // VTODO priority is the string "1"-"9" (1 = highest) or "" when unset.
@@ -129,6 +468,16 @@ Column {
     width: parent.width
     spacing: Style.space(4)
 
+    // Row (within the visible page) the keyboard cursor is on, or -1 when the
+    // cursor lives in another section or screen.
+    readonly property int cursorRow: tasksView.keyContext === "list"
+      && tasksView.navSections.indexOf(taskSection) === tasksView.cursorSection
+      ? tasksView.cursorRow : -1
+
+    function rowItem(index) {
+      return index >= 0 ? rowRepeater.itemAt(index) : null
+    }
+
     // Model rebuilds hand back a fresh array; that reference change snaps
     // back to the first page, mirroring how delegate rebuilds reset
     // TaskItem.expanded. Imperative write, so no binding loop.
@@ -170,12 +519,14 @@ Column {
     }
 
     Repeater {
+      id: rowRepeater
       model: taskSection.pageSlots
 
       TaskItem {
         required property var modelData
         required property int index
         readonly property bool placeholder: !modelData
+        cursor: !placeholder && taskSection.cursorRow === index
         width: taskSection.width
         // Filler slots (modelData null) render the stand-in so the row's
         // internal layout matches real rows exactly; `inert` blanks and
@@ -289,6 +640,59 @@ Column {
     // every interaction disabled (no hover fill, no click targets, no
     // cursor change).
     property bool inert: false
+    // Keyboard cursor is on this row.
+    property bool cursor: false
+    // Details were opened by arming a delete, not by the user.
+    property bool openedForDelete: false
+
+    onCursorChanged: {
+      if (!taskItem.cursor) {
+        // Moving away abandons a half-confirmed delete, and closes details
+        // that only the delete prompt opened.
+        taskItem.deleteArmed = false
+        deleteArmTimer.stop()
+        if (taskItem.openedForDelete) taskItem.expanded = false
+      }
+    }
+
+    function toggleExpanded() {
+      if (!taskItem.task || taskItem.inert) return
+      taskItem.openedForDelete = false
+      taskItem.expanded = !taskItem.expanded
+      tasksView.debugLog("action: " + (taskItem.expanded ? "expand" : "collapse") + " task " + taskItem.task.uid)
+      tasksView.scheduleReveal()
+    }
+
+    // Completes a pending task or reopens a completed one.
+    function toggleComplete() {
+      if (!taskItem.task || taskItem.inert || !tasksView.taskService) return
+      if (taskItem.completed) {
+        tasksView.debugLog("action: reopen task " + taskItem.task.uid)
+        tasksView.taskService.updateTask(taskItem.task, "NEEDS-ACTION", 0)
+        return
+      }
+      tasksView.debugLog("action: complete task " + taskItem.task.uid)
+      tasksView.taskService.completeTask(taskItem.task)
+    }
+
+    // Two-step delete: the first call arms and opens the details so the
+    // "Confirm delete?" button is visible, the second call deletes.
+    function requestDelete() {
+      if (!taskItem.task || taskItem.inert || !tasksView.taskService || tasksView.taskService.pendingDeleteUid) return
+      if (!taskItem.deleteArmed) {
+        taskItem.openedForDelete = !taskItem.expanded
+        taskItem.expanded = true
+        taskItem.deleteArmed = true
+        deleteArmTimer.restart()
+        tasksView.debugLog("action: arm delete task " + taskItem.task.uid)
+        tasksView.scheduleReveal()
+        return
+      }
+      taskItem.deleteArmed = false
+      deleteArmTimer.stop()
+      tasksView.debugLog("action: delete task " + taskItem.task.uid)
+      tasksView.taskService.deleteTask(taskItem.task)
+    }
 
     // Case-insensitive completed check: the Done tab filters with
     // TaskModel.isCompleted, so icon/strikethrough must use the same
@@ -411,9 +815,12 @@ Column {
     // owns the hover grab there; OR it in to keep the row highlighted while
     // the cursor is on the glyph. Expanded rows hold the fill so the open
     // card reads as active even without the cursor over it.
-    color: !taskItem.inert && (taskItem.expanded || taskItemMouse.containsMouse || statusCompleteMouse.containsMouse)
+    color: !taskItem.inert && (taskItem.cursor || taskItem.expanded || taskItemMouse.containsMouse || statusCompleteMouse.containsMouse)
       ? Style.hoverFillFor(Color.foreground, Color.accent)
       : "transparent"
+    // Keyboard cursor outline.
+    border.width: taskItem.cursor ? 1 : 0
+    border.color: Color.accent
 
     // Curtain-reveal for the detail: animating the height opens/closes over
     // the clipped content. Pure retarget of the binding above — the inputs
@@ -573,11 +980,7 @@ Column {
       // Filler rows are dead space: no expansion, no hover, no cursor.
       enabled: !taskItem.inert
       cursorShape: Qt.PointingHandCursor
-      onClicked: {
-        if (!taskItem.task) return
-        taskItem.expanded = !taskItem.expanded
-        tasksView.debugLog("action: " + (taskItem.expanded ? "expand" : "collapse") + " task " + taskItem.task.uid)
-      }
+      onClicked: taskItem.toggleExpanded()
     }
 
     // Expanded task detail, hanging below the collapsed row and indented to
@@ -700,16 +1103,7 @@ Column {
           foreground: Color.accent
           bordered: true
           enabled: taskItem.expanded && tasksView.taskService
-          onClicked: {
-            if (!taskItem.task) return
-            if (taskItem.completed) {
-              tasksView.debugLog("action: reopen task " + taskItem.task.uid)
-              tasksView.taskService.updateTask(taskItem.task, "NEEDS-ACTION", 0)
-              return
-            }
-            tasksView.debugLog("action: complete task " + taskItem.task.uid)
-            tasksView.taskService.completeTask(taskItem.task)
-          }
+          onClicked: taskItem.toggleComplete()
         }
 
         // Destructive delete: the first click arms (the label swaps to an
@@ -731,19 +1125,7 @@ Column {
           // detail from catching clicks aimed at the next row while this row
           // is collapsed (opacity does not block hit-testing).
           enabled: taskItem.expanded && tasksView.taskService && !tasksView.taskService.pendingDeleteUid
-          onClicked: {
-            if (!taskItem.task) return
-            if (!taskItem.deleteArmed) {
-              taskItem.deleteArmed = true
-              deleteArmTimer.restart()
-              tasksView.debugLog("action: arm delete task " + taskItem.task.uid)
-              return
-            }
-            taskItem.deleteArmed = false
-            deleteArmTimer.stop()
-            tasksView.debugLog("action: delete task " + taskItem.task.uid)
-            tasksView.taskService.deleteTask(taskItem.task)
-          }
+          onClicked: taskItem.requestDelete()
         }
       }
     }
@@ -826,6 +1208,10 @@ Column {
     id: settingsCalendarRow
     property var calendar: ({})
     property int calendarIndex: 0
+    // Keyboard cursor is on this row.
+    property bool cursor: false
+    // Swatch highlighted while the palette is open (keyboard or mouse).
+    property int paletteIndex: 0
 
     width: parent ? parent.width : 0
     spacing: Style.space(8)
@@ -846,6 +1232,30 @@ Column {
     // Non-toggleable calendars stay display-only dots; also serialized like
     // the toggle button: no pick starts while any color write is in flight.
     readonly property bool pickable: toggleable && !colorBusy
+
+    function toggleEnabled() {
+      if (!toggleable || !calendarService || calendarService.pendingToggleId) return
+      debugLog("action: " + (calendarDisabled ? "enable" : "disable") + " calendar " + calendarId)
+      calendarService.setCalendarEnabled(calendarId, calendarDisabled)
+    }
+
+    function openPalette() {
+      if (!pickable) return
+      colorPopup.open()
+    }
+
+    function closePalette() { colorPopup.close() }
+
+    function movePalette(delta) {
+      var count = TaskModel.DEFAULT_CALENDAR_COLORS.length
+      paletteIndex = (paletteIndex + delta + count) % count
+    }
+
+    function pickPalette() {
+      if (colorBusy) return
+      if (calendarService) calendarService.setCalendarColor(calendarId, TaskModel.DEFAULT_CALENDAR_COLORS[paletteIndex])
+      colorPopup.close()
+    }
 
     Rectangle {
       width: Style.space(22)
@@ -875,6 +1285,21 @@ Column {
         dim: false
         closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
+        // Keys keep flowing through the panel's dispatcher (palette context)
+        // instead of the popup, so tell the view which row owns them.
+        onOpened: {
+          var current = -1
+          for (var i = 0; i < TaskModel.DEFAULT_CALENDAR_COLORS.length; i++) {
+            if (TaskModel.colorsMatch(TaskModel.DEFAULT_CALENDAR_COLORS[i], settingsCalendarRow.currentColor)) { current = i; break }
+          }
+          settingsCalendarRow.paletteIndex = Math.max(0, current)
+          tasksView.activePalette = settingsCalendarRow
+        }
+        onClosed: {
+          if (tasksView.activePalette === settingsCalendarRow) tasksView.activePalette = null
+          tasksView.focusPanel()
+        }
+
         // Below the swatch by default; flip above when the row sits near the
         // bottom of the panel so the palette never opens off-surface.
         onAboutToShow: {
@@ -900,12 +1325,16 @@ Column {
 
             Rectangle {
               required property var modelData
+              required property int index
+              readonly property bool keyboardCurrent: tasksView.activePalette === settingsCalendarRow && settingsCalendarRow.paletteIndex === index
               width: Style.space(16)
               height: Style.space(16)
               radius: width / 2
               color: modelData
-              border.width: TaskModel.colorsMatch(modelData, settingsCalendarRow.currentColor) ? 2 : 1
-              border.color: TaskModel.colorsMatch(modelData, settingsCalendarRow.currentColor) ? Color.foreground : Util.alpha(Color.foreground, 0.35)
+              border.width: keyboardCurrent || TaskModel.colorsMatch(modelData, settingsCalendarRow.currentColor) ? 2 : 1
+              border.color: keyboardCurrent ? Color.accent
+                : TaskModel.colorsMatch(modelData, settingsCalendarRow.currentColor) ? Color.foreground
+                : Util.alpha(Color.foreground, 0.35)
 
               MouseArea {
                 anchors.fill: parent
@@ -935,9 +1364,10 @@ Column {
     Text {
       anchors.verticalCenter: parent.verticalCenter
       text: settingsCalendarRow.currentName
-      color: settingsCalendarRow.calendarDisabled ? Color.muted : Color.foreground
+      color: settingsCalendarRow.cursor ? Color.accent : settingsCalendarRow.calendarDisabled ? Color.muted : Color.foreground
       font.family: Style.font.family
       font.pixelSize: Style.font.body
+      font.bold: settingsCalendarRow.cursor
       textFormat: Text.PlainText
     }
 
@@ -965,10 +1395,8 @@ Column {
       anchors.verticalCenter: parent.verticalCenter
       text: calendarService && calendarService.pendingToggleId === settingsCalendarRow.calendarId ? "Updating..." : settingsCalendarRow.calendarDisabled ? "Enable" : "Disable"
       bordered: true
-      onClicked: {
-        debugLog("action: " + (settingsCalendarRow.calendarDisabled ? "enable" : "disable") + " calendar " + settingsCalendarRow.calendarId)
-        if (calendarService) calendarService.setCalendarEnabled(settingsCalendarRow.calendarId, settingsCalendarRow.calendarDisabled)
-      }
+      hasCursor: settingsCalendarRow.cursor
+      onClicked: settingsCalendarRow.toggleEnabled()
     }
   }
 
@@ -1016,7 +1444,8 @@ Column {
       : picked ? Style.selectedFillFor(Color.foreground, Color.accent)
       : cellMouse.containsMouse ? Style.hoverFillFor(Color.foreground, Color.accent)
       : "transparent"
-    border.width: dueCell.cell && dueCell.cell.today && !picked ? 1 : 0
+    readonly property bool cursor: dueCell.cell ? dueCell.cell.cursor === true && tasksView.keyContext === "picker" : false
+    border.width: dueCell.cursor ? 2 : dueCell.cell && dueCell.cell.today && !picked ? 1 : 0
     border.color: Color.accent
 
     Text {
@@ -1052,6 +1481,8 @@ Column {
     property int viewYear: 0
     property int viewMonth: 0
     property bool popupOpen: visible
+    // Day the keyboard cursor is on (due key), shown with an accent outline.
+    property string cursorKey: ""
 
     readonly property real cellGap: Style.space(2)
     readonly property real cellSize: Math.max(Style.space(12), Math.floor((width - cellGap * 6) / 7))
@@ -1076,7 +1507,8 @@ Column {
           day: cellDay,
           inMonth: cellMonth === viewMonth && cellYear === viewYear,
           today: key === today,
-          selected: key === addTaskView.dueKey
+          selected: key === addTaskView.dueKey,
+          cursor: key === cursorKey
         })
         cursor.setDate(cursor.getDate() + 1)
       }
@@ -1100,6 +1532,43 @@ Column {
       viewMonth = tasksView.now.getMonth()
     }
 
+    // --- Keyboard cursor ---
+    function followCursor(date) {
+      cursorKey = addTaskView.dueKeyForDate(date)
+      viewYear = date.getFullYear()
+      viewMonth = date.getMonth()
+    }
+
+    function cursorDate() {
+      return addTaskView.parseDueKey(cursorKey) || new Date(tasksView.now)
+    }
+
+    function moveDays(delta) {
+      var date = cursorDate()
+      date.setDate(date.getDate() + delta)
+      followCursor(date)
+    }
+
+    // Month steps keep the day number where the month is long enough, else
+    // land on its last day (Jan 31 + 1 month = Feb 28/29).
+    function moveMonths(delta) {
+      var date = cursorDate()
+      var day = date.getDate()
+      date.setDate(1)
+      date.setMonth(date.getMonth() + delta)
+      var last = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate()
+      date.setDate(Math.min(day, last))
+      followCursor(date)
+    }
+
+    function cursorToday() {
+      followCursor(new Date(tasksView.now))
+    }
+
+    function pickCursor() {
+      pickCell({ key: cursorKey })
+    }
+
     // Handles a day-cell click on behalf of the cell (the cell's inline
     // component scope cannot see the add view's ids directly).
     function pickCell(cell) {
@@ -1119,6 +1588,7 @@ Column {
       if (!anchor) anchor = new Date(tasksView.now)
       viewYear = anchor.getFullYear()
       viewMonth = anchor.getMonth()
+      cursorKey = addTaskView.dueKeyForDate(anchor)
       forceActiveFocus()
     }
 
@@ -1237,6 +1707,23 @@ Column {
     textFormat: Text.PlainText
   }
 
+  // Filter bar ("/"): narrows both list tabs. Enter keeps the filter and
+  // returns to the list; Esc once leaves the field, Esc again clears it.
+  TextField {
+    id: filterField
+    Keys.forwardTo: tasksView.keyForward
+    visible: (tasksView.filterOpen || tasksView.filterActive)
+      && (tasksView.activeTab === "pending" || tasksView.activeTab === "done")
+    width: parent.width
+    placeholderText: "Filter tasks (Enter to keep, Esc to clear)"
+    font.family: Style.font.family
+    font.pixelSize: Style.font.bodySmall
+    onAccepted: {
+      filterField.focus = false
+      tasksView.focusPanel()
+    }
+  }
+
   // Pending tab content
   Column {
     visible: tasksView.activeTab === "pending"
@@ -1244,19 +1731,21 @@ Column {
     spacing: Style.space(12)
 
     TaskSection {
+      id: upcomingSection
       title: "Upcoming"
-      count: TaskModel.upcomingTaskCount(tasksView.allTasks)
-      tasks: TaskModel.allUpcomingTasks(tasksView.allTasks)
-      emptyText: "No upcoming tasks"
+      count: tasksView.filterActive ? tasks.length : TaskModel.upcomingTaskCount(tasksView.allTasks)
+      tasks: TaskModel.filterTasks(TaskModel.allUpcomingTasks(tasksView.allTasks), tasksView.filterText)
+      emptyText: tasksView.filterActive ? "No matching tasks" : "No upcoming tasks"
       dateLabel: "due"
       showOverdue: true
     }
 
     TaskSection {
+      id: backlogSection
       title: "Backlog"
-      count: TaskModel.backlogTaskCount(tasksView.allTasks)
-      tasks: TaskModel.backlogTasks(tasksView.allTasks)
-      emptyText: "No backlog tasks"
+      count: tasksView.filterActive ? tasks.length : TaskModel.backlogTaskCount(tasksView.allTasks)
+      tasks: TaskModel.filterTasks(TaskModel.backlogTasks(tasksView.allTasks), tasksView.filterText)
+      emptyText: tasksView.filterActive ? "No matching tasks" : "No backlog tasks"
       dateLabel: "created"
       showOverdue: false
     }
@@ -1269,13 +1758,14 @@ Column {
     spacing: Style.space(12)
 
     TaskSection {
+      id: doneSection
       title: "Completed"
-      count: TaskModel.doneTaskCount(tasksView.allTasks)
-      tasks: TaskModel.allDoneTasks(tasksView.allTasks)
+      count: tasksView.filterActive ? tasks.length : TaskModel.doneTaskCount(tasksView.allTasks)
+      tasks: TaskModel.filterTasks(TaskModel.allDoneTasks(tasksView.allTasks), tasksView.filterText)
       // Roomier page: the done tab stacks one section, so 10 rows (~430px)
       // still fits the fixed panel height where two 5-row sections do.
       pageSize: 10
-      emptyText: "No completed tasks"
+      emptyText: tasksView.filterActive ? "No matching tasks" : "No completed tasks"
       dateLabel: "completed"
       showOverdue: false
     }
@@ -1308,6 +1798,7 @@ Column {
     }
 
     Repeater {
+      id: calendarRows
       model: calendarService ? calendarService.calendars : []
 
       SettingsCalendarRow {
@@ -1316,6 +1807,7 @@ Column {
         width: parent ? parent.width : 0
         calendar: modelData
         calendarIndex: index
+        cursor: tasksView.configCursorKind === "calendar" && tasksView.configIndex === index
       }
     }
 
@@ -1461,10 +1953,8 @@ Column {
       visible: !caldavForm.visible
       text: "Connect Server"
       bordered: true
-      onClicked: {
-        debugLog("action: open caldav form")
-        caldavForm.visible = true
-      }
+      hasCursor: tasksView.configCursorKind === "connect"
+      onClicked: tasksView.openCaldavForm()
     }
 
     Column {
@@ -1484,27 +1974,33 @@ Column {
 
       TextField {
         id: caldavUrlField
+        Keys.forwardTo: tasksView.keyForward
         width: parent.width
         placeholderText: "https://caldav.example.com/dav/"
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
+        onAccepted: caldavUsernameField.forceActiveFocus()
       }
 
       TextField {
         id: caldavUsernameField
+        Keys.forwardTo: tasksView.keyForward
         width: parent.width
         placeholderText: "Username"
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
+        onAccepted: caldavPasswordField.forceActiveFocus()
       }
 
       TextField {
         id: caldavPasswordField
+        Keys.forwardTo: tasksView.keyForward
         width: parent.width
         placeholderText: "Password"
         password: true
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
+        onAccepted: tasksView.submitCaldav()
       }
 
       Row {
@@ -1515,12 +2011,7 @@ Column {
           text: calendarService && calendarService.caldavSetupStatus === "connecting" ? "Connecting..." : "Connect"
           bordered: true
           enabled: calendarService && calendarService.caldavSetupStatus !== "connecting"
-          onClicked: {
-            debugLog("action: caldav connect " + sanitizeUrl(caldavUrlField.text))
-            if (calendarService) {
-              calendarService.setupCaldav("", caldavUrlField.text, caldavUsernameField.text, caldavPasswordField.text)
-            }
-          }
+          onClicked: tasksView.submitCaldav()
         }
 
         Button {
@@ -1593,16 +2084,13 @@ Column {
     }
 
     Toggle {
+      id: debugToggle
       width: parent.width
       label: "Debug mode"
       description: "Log plugin actions to the shell console"
       checked: calendarService ? calendarService.debugMode : false
-      onClicked: {
-        var next = !(calendarService && calendarService.debugMode)
-        if (calendarService) calendarService.debugMode = next
-        if (panel) panel.persistSettings({ debug: next })
-        debugLog("action: toggle debug mode -> " + next)
-      }
+      hasCursor: tasksView.configCursorKind === "debug"
+      onClicked: tasksView.toggleDebugMode()
     }
 
     Button {
@@ -1610,6 +2098,7 @@ Column {
       visible: calendarService ? calendarService.debugMode : false
       text: "Clear logs"
       bordered: true
+      hasCursor: tasksView.configCursorKind === "clearLogs"
       onClicked: if (calendarService) calendarService.clearDebugLog()
     }
 
@@ -1757,14 +2246,44 @@ Column {
     }
 
     function toggleDuePicker() {
-      duePickerOpen = !duePickerOpen
-      if (!duePickerOpen) restorePanelFocus()
+      if (duePickerOpen) closeDuePicker()
+      else duePickerOpen = true
     }
 
+    // Closing the picker returns the keyboard to the Due button (not the
+    // list cursor), so Tab/Shift+Tab continue from where the user was.
     function closeDuePicker() {
       if (!duePickerOpen) return
       duePickerOpen = false
-      restorePanelFocus()
+      Qt.callLater(function() { addDueTrigger.forceActiveFocus() })
+    }
+
+    // Ctrl+J / Ctrl+K: cycle the target calendar without opening the list.
+    function stepCalendar(delta) {
+      var all = writableCalendars
+      if (all.length === 0) return
+      var index = -1
+      for (var i = 0; i < all.length; i++) if (String(all[i].id) === calendarId) { index = i; break }
+      var next = all[((index < 0 ? 0 : index) + delta + all.length) % all.length]
+      calendarId = String(next.id)
+      addCalendarDropdown.value = calendarId
+      debugLog("action: add task calendar -> " + calendarId)
+    }
+
+    // Tab / Shift+Tab walk the form in reading order.
+    function focusOrder() {
+      return [addSummaryField, addDescriptionField, addDueTrigger, addCategoryField, addCreateButton, addCancelButton]
+    }
+
+    function formStep(direction) {
+      var order = focusOrder()
+      var current = -1
+      for (var i = 0; i < order.length; i++) if (order[i].activeFocus) { current = i; break }
+      if (duePickerOpen) { closeDuePicker(); return }
+      var next = current < 0 ? (direction > 0 ? 0 : order.length - 1)
+        : (current + direction + order.length) % order.length
+      order[next].forceActiveFocus()
+      tasksView.reveal(order[next])
     }
 
     function clearDueDate() {
@@ -1950,6 +2469,9 @@ Column {
 
       TextField {
         id: addSummaryField
+        Keys.forwardTo: tasksView.keyForward
+        Keys.onTabPressed: function(event) { addTaskView.formStep(1); event.accepted = true }
+        Keys.onBacktabPressed: function(event) { addTaskView.formStep(-1); event.accepted = true }
         width: parent.width
         placeholderText: "What needs doing?"
         font.family: Style.font.family
@@ -1980,6 +2502,10 @@ Column {
 
         TextArea {
           id: addDescriptionField
+          Keys.forwardTo: tasksView.keyForward
+          // Tab / Shift+Tab walk the form; a multi-line TextArea would otherwise insert tabs.
+          Keys.onTabPressed: function(event) { addTaskView.formStep(1); event.accepted = true }
+          Keys.onBacktabPressed: function(event) { addTaskView.formStep(-1); event.accepted = true }
           anchors.fill: parent
           anchors.leftMargin: Style.spacing.controlPaddingX + Border.left(parent._borderSpec)
           anchors.rightMargin: Style.spacing.controlPaddingX + Border.right(parent._borderSpec)
@@ -2014,9 +2540,11 @@ Column {
 
         Button {
           id: addDueTrigger
+          Keys.forwardTo: tasksView.keyForward
           width: parent.width - (addDueClear.visible ? addDueClear.width + parent.spacing : 0)
           leftAlign: true
           bordered: true
+          focusable: true
           iconText: "\uf073"
           text: addTaskView.dueKey !== "" ? addTaskView.formatDueChoice(addTaskView.dueKey) : "No due date"
           foreground: addTaskView.dueKey !== "" ? Color.accent : Color.foreground
@@ -2045,6 +2573,9 @@ Column {
 
       TextField {
         id: addCategoryField
+        Keys.forwardTo: tasksView.keyForward
+        Keys.onTabPressed: function(event) { addTaskView.formStep(1); event.accepted = true }
+        Keys.onBacktabPressed: function(event) { addTaskView.formStep(-1); event.accepted = true }
         width: parent.width
         placeholderText: "e.g. errands, home"
         font.family: Style.font.family
@@ -2071,17 +2602,23 @@ Column {
       spacing: Style.space(6)
 
       Button {
+        id: addCreateButton
+        Keys.forwardTo: tasksView.keyForward
         text: "Create Task"
         tooltipText: "Create task"
         foreground: Color.accent
         bordered: true
+        focusable: true
         enabled: addTaskView.canSubmit
         opacity: enabled ? 1 : 0.4
         onClicked: addTaskView.trySubmit()
       }
 
       Button {
+        id: addCancelButton
+        Keys.forwardTo: tasksView.keyForward
         text: "Cancel"
+        focusable: true
         onClicked: addTaskView.cancelAdd()
       }
     }
@@ -2162,6 +2699,7 @@ Column {
   // --- Tab transitions ---
 
   onActiveTabChanged: {
+    resetCursor()
     if (activeTab === "add") {
       addTaskView.beginAdd()
     } else {

@@ -2485,7 +2485,12 @@ def _write_shell_config(path: Path, data: dict) -> None:
 
 
 def ensure_right_anchor(plugin_id: str) -> dict:
-    """Ensure the plugin appears in the right bar section (idempotent, no clock interference)."""
+    """Ensure the plugin appears somewhere in the bar (idempotent).
+
+    Only adds the right-section entry when the widget is in no section at all:
+    a user who deliberately placed it on the left or in the center must not get
+    a second copy re-added on every shell start.
+    """
     plugin_id = str(plugin_id or "").strip()
     path = shell_config_path()
     if not plugin_id or not path.is_file():
@@ -2502,21 +2507,24 @@ def ensure_right_anchor(plugin_id: str) -> dict:
         layout = {}
         bar["layout"] = layout
 
+    placed = {
+        section: [_bar_entry_id(e) for e in entries]
+        for section, entries in layout.items()
+        if isinstance(entries, list)
+    }
+    print(f"[tasks-widget] ensure_right_anchor path={path} plugin_id={plugin_id} layout={placed}", file=sys.stderr)
+    if any(plugin_id in ids for ids in placed.values()):
+        print("[tasks-widget] ensure_right_anchor already present", file=sys.stderr)
+        return {"ok": True, "changed": False}
+
     right_entries = layout.get("right")
     if not isinstance(right_entries, list):
         right_entries = []
         layout["right"] = right_entries
-
-    existing_ids = [_bar_entry_id(e) for e in right_entries]
-    print(f"[tasks-widget] ensure_right_anchor path={path} plugin_id={plugin_id} right={existing_ids}", file=sys.stderr)
-    if plugin_id not in existing_ids:
-        right_entries.append({"id": plugin_id})
-        _write_shell_config(path, data)
-        print(f"[tasks-widget] ensure_right_anchor wrote {plugin_id} into right", file=sys.stderr)
-        return {"ok": True, "changed": True}
-
-    print("[tasks-widget] ensure_right_anchor already present", file=sys.stderr)
-    return {"ok": True, "changed": False}
+    right_entries.append({"id": plugin_id})
+    _write_shell_config(path, data)
+    print(f"[tasks-widget] ensure_right_anchor wrote {plugin_id} into right", file=sys.stderr)
+    return {"ok": True, "changed": True}
 
 
 def reminders_file() -> Path:
