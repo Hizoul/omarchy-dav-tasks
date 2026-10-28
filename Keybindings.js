@@ -74,6 +74,7 @@ var ACTIONS = [
   { id: "filter", label: "Filter tasks", category: "Navigation", contexts: LIST, defaults: ["/"], keywords: "search find" },
 
   { id: "toggleExpand", label: "Show or hide task details", category: "Tasks", contexts: LIST, defaults: ["Enter", "o"], keywords: "expand collapse open description" },
+  { id: "editTask", label: "Edit task", category: "Tasks", contexts: LIST, defaults: ["e"], keywords: "change rename modify update title description due" },
   { id: "toggleComplete", label: "Complete or reopen task", category: "Tasks", contexts: LIST, defaults: ["x", "Space"], keywords: "done check finish status" },
   { id: "deleteTask", label: "Delete task (press twice)", category: "Tasks", contexts: LIST, defaults: ["d", "Delete"], keywords: "remove trash confirm" },
 
@@ -81,7 +82,7 @@ var ACTIONS = [
   { id: "configColor", label: "Pick calendar color", category: "Config", contexts: ["config"], defaults: ["c"], keywords: "colour swatch palette" },
   { id: "connectServer", label: "Connect CalDAV server", category: "Config", contexts: ["config"], defaults: ["s"], keywords: "account login url" },
 
-  { id: "formSubmit", label: "Create task", category: "New task form", contexts: ["form"], defaults: ["Ctrl+Enter"], keywords: "save submit add" },
+  { id: "formSubmit", label: "Create or save task", category: "New task form", contexts: ["form"], defaults: ["Ctrl+Enter"], keywords: "save submit add" },
   { id: "formPickDue", label: "Open due date picker", category: "New task form", contexts: ["form"], defaults: ["Ctrl+d"], keywords: "calendar date deadline" },
   { id: "formCalendarPopup", label: "Choose calendar from list", category: "New task form", contexts: ["form"], defaults: ["Ctrl+l"], keywords: "list target dropdown" },
   { id: "formCalendarNext", label: "Next calendar", category: "New task form", contexts: ["form"], defaults: ["Ctrl+j"], keywords: "list target" },

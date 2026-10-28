@@ -364,6 +364,23 @@ def run() -> int:
                     and reopened_task.get("completed") == "",
                     str(reopened),
                 )
+                edited = mod.edit_task_caldav("work", uid, {"title": "Harness Task (edited)", "description": "", "due": "2026-12-24", "categories": ["Edited"]})
+                edited_task = edited.get("task") or {}
+                status_code, raw, _headers = mod.caldav_http("GET", task_resource, USER, PASSWORD, b"", {}, base_url=work["href"])
+                edited_ics = raw.decode("utf-8", "replace")
+                check(
+                    "caldav edit-task rewrites only the edited fields",
+                    edited.get("ok") is True
+                    and edited_task.get("title") == "Harness Task (edited)"
+                    and edited_task.get("description") == ""
+                    and edited_task.get("categories") == ["Edited"]
+                    and str(edited_task.get("due", "")).startswith("2026-12-24")
+                    and "SUMMARY:Harness Task (edited)" in edited_ics
+                    and "DUE:20261224T000000Z" in edited_ics
+                    and "DESCRIPTION:Harness description" not in edited_ics
+                    and "STATUS:NEEDS-ACTION" in edited_ics,
+                    str((edited, edited_ics)),
+                )
                 seeded_uid = "uid-invalid-dates@test"
                 # Filename mirrors the UID: Nextcloud names task resources by
                 # UID, which is what update_task_caldav's URL build assumes.

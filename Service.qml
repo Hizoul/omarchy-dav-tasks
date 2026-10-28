@@ -142,7 +142,7 @@ Item {
   // ===== Tasks =====
 
   function tasksMutationBusy() {
-    return tasksCreateProc.running || tasksUpdateProc.running || tasksDeleteProc.running
+    return tasksCreateProc.running || tasksUpdateProc.running || tasksEditProc.running || tasksDeleteProc.running
   }
 
   function listTasks(forceSync) {
@@ -353,6 +353,40 @@ Item {
     }
     tasksUpdateProc.command = cmd
     tasksUpdateProc.running = true
+  }
+
+  // Edit title, description, due date (YYYY-MM-DD, "" clears) and categories
+  // of an existing task. `fields` carries only what changed. Content travels
+  // on the helper's stdin like create-task, never in argv.
+  function editTask(task, fields) {
+    debugLog("action: edit-task uid=" + (task ? task.uid : "") + " fields=" + Object.keys(fields || {}).join(","))
+    if (!task || !task.uid || task._pending || !fields) return false
+    tasksStatus = "saving"
+    tasksErrorMessage = ""
+    if (tasksEditProc.running) tasksEditProc.running = false
+    tasksPendingUpdateOriginal = task
+    var next = TaskModel.normalizedTask(task)
+    var payload = {}
+    if (fields.title !== undefined) { payload.title = String(fields.title); next.title = payload.title }
+    if (fields.description !== undefined) { payload.description = String(fields.description); next.description = payload.description }
+    if (fields.due !== undefined) { payload.due = String(fields.due); next.due = payload.due }
+    if (fields.categories !== undefined) {
+      payload.categories = Array.isArray(fields.categories) ? fields.categories.map(function(category) { return String(category) }) : []
+      next.categories = payload.categories.slice()
+    }
+    next._pending = true
+    mergeTask(next)
+    tasksEditProc.secret = JSON.stringify(payload)
+    // onStarted closes stdin after writing, so re-open it for every run.
+    tasksEditProc.stdinEnabled = true
+    tasksEditProc.command = [
+      helperPath(), "edit-task",
+      "--provider", calendarProviderById(task.calendarId),
+      "--calendar-id", String(task.calendarId || defaultCalendarId()),
+      "--uid", String(task.uid || "")
+    ]
+    tasksEditProc.running = true
+    return true
   }
 
   function finishUpdateTask(text, exitCode) {
@@ -676,6 +710,25 @@ Item {
 
     onExited: function(exitCode) {
       root.finishUpdateTask(root.helperText(tasksUpdateOut.text, tasksUpdateErr.text), exitCode)
+    }
+  }
+
+  Process {
+    id: tasksEditProc
+    property string secret: ""
+    running: false
+    stdinEnabled: true
+    onStarted: {
+      write(secret + "\n")
+      secret = ""
+      stdinEnabled = false
+    }
+
+    stdout: StdioCollector { id: tasksEditOut; waitForEnd: true }
+    stderr: StdioCollector { id: tasksEditErr; waitForEnd: true }
+
+    onExited: function(exitCode) {
+      root.finishUpdateTask(root.helperText(tasksEditOut.text, tasksEditErr.text), exitCode)
     }
   }
 

@@ -33,6 +33,9 @@ Column {
   readonly property string filterText: filterField.text
   readonly property bool filterActive: filterText.trim() !== ""
   property bool filterOpen: false
+  readonly property bool editingTask: addTaskView.editing
+  // Why the last edit attempt was refused (shown above the list).
+  property string editError: ""
 
   // Task cursor: which section on the active list tab, and which row of the
   // page that section currently shows. Config tab uses configIndex instead.
@@ -361,6 +364,10 @@ Column {
       item = currentItem()
       if (item) item.requestDelete()
       return true
+    case "editTask":
+      item = currentItem()
+      if (item) item.requestEdit()
+      return true
     case "configActivate": activateConfig(); return true
     case "configColor":
       if (configCursorKind === "calendar") {
@@ -673,6 +680,11 @@ Column {
       }
       tasksView.debugLog("action: complete task " + taskItem.task.uid)
       tasksView.taskService.completeTask(taskItem.task)
+    }
+
+    function requestEdit() {
+      if (!taskItem.task || taskItem.inert || !tasksView.taskService) return
+      addTaskView.beginEdit(taskItem.task)
     }
 
     // Two-step delete: the first call arms and opens the details so the
@@ -1104,6 +1116,19 @@ Column {
           bordered: true
           enabled: taskItem.expanded && tasksView.taskService
           onClicked: taskItem.toggleComplete()
+        }
+
+        Button {
+          id: editTaskButton
+          anchors.horizontalCenter: parent.horizontalCenter
+          anchors.verticalCenter: parent.verticalCenter
+          text: "Edit"
+          iconText: "\uf040"
+          tooltipText: "Edit this task"
+          foreground: Color.accent
+          bordered: true
+          enabled: taskItem.expanded && tasksView.taskService
+          onClicked: taskItem.requestEdit()
         }
 
         // Destructive delete: the first click arms (the label swaps to an
@@ -1696,6 +1721,17 @@ Column {
     font.pixelSize: Style.font.bodySmall
   }
 
+  Text {
+    visible: tasksView.editError !== "" && tasksView.activeTab !== "add"
+    width: parent.width
+    text: tasksView.editError
+    color: Color.urgent
+    wrapMode: Text.WordWrap
+    font.family: Style.font.family
+    font.pixelSize: Style.font.bodySmall
+    textFormat: Text.PlainText
+  }
+
   // Loading indicator
   Text {
     visible: taskService && taskService.tasksStatus === "loading"
@@ -2149,6 +2185,11 @@ Column {
     property bool duePickerOpen: false
     property bool submitBusy: false
     property string createError: ""
+    // Edit mode reuses this form: the task being edited (null when adding)
+    // and the new-task draft stashed while editing.
+    property var editingTask: null
+    property var stashedDraft: null
+    readonly property bool editing: editingTask !== null
 
     readonly property var writableCalendars: {
       var all = calendarService && calendarService.calendars ? calendarService.calendars : []
@@ -2170,7 +2211,7 @@ Column {
     }
 
     readonly property bool canSubmit: !submitBusy
-      && calendarId !== ""
+      && (editing || calendarId !== "")
       && calendarService !== null
       && trimText(addSummaryField.text).length > 0
 
@@ -2310,8 +2351,79 @@ Column {
       createError = ""
     }
 
+    // --- Edit mode ---
+
+    function beginEdit(task) {
+      if (!task || !task.uid || task._pending) return false
+      if (!hasCalendar(String(task.calendarId || ""))) {
+        tasksView.editError = "That calendar is read-only, so the task can't be edited."
+        return false
+      }
+      tasksView.editError = ""
+      if (!editing) {
+        stashedDraft = {
+          summary: addSummaryField.text,
+          description: addDescriptionField.text,
+          category: addCategoryField.text,
+          dueKey: dueKey,
+          calendarId: calendarId
+        }
+      }
+      editingTask = task
+      calendarId = String(task.calendarId)
+      addCalendarDropdown.value = calendarId
+      addSummaryField.text = String(task.title || "")
+      addDescriptionField.text = String(task.description || "")
+      addCategoryField.text = (task.categories || []).join(", ")
+      var due = TaskModel.parseDateTime(task.due)
+      dueKey = due ? dueKeyForDate(due) : ""
+      duePickerOpen = false
+      createError = ""
+      debugLog("action: begin edit task " + task.uid)
+      tasksView.activeTab = "add"
+      return true
+    }
+
+    // Leave edit mode and bring back the new-task draft it displaced.
+    function endEdit() {
+      if (!editing) return
+      editingTask = null
+      var draft = stashedDraft
+      stashedDraft = null
+      addSummaryField.text = draft ? draft.summary : ""
+      addDescriptionField.text = draft ? draft.description : ""
+      addCategoryField.text = draft ? draft.category : ""
+      dueKey = draft ? draft.dueKey : ""
+      duePickerOpen = false
+      createError = ""
+      if (draft && hasCalendar(draft.calendarId)) calendarId = draft.calendarId
+      else resetCalendar()
+      addCalendarDropdown.value = calendarId
+    }
+
+    // Send only the fields that differ from the stored task.
+    function submitEdit() {
+      var task = editingTask
+      if (!task || !calendarService) return
+      var fields = {}
+      var title = trimText(addSummaryField.text)
+      if (title !== String(task.title || "")) fields.title = title
+      var description = String(addDescriptionField.text == null ? "" : addDescriptionField.text)
+      if (description !== String(task.description || "")) fields.description = description
+      var categories = parsedCategories()
+      if (categories.join("\u0001") !== (task.categories || []).join("\u0001")) fields.categories = categories
+      var original = TaskModel.parseDateTime(task.due)
+      var originalKey = original ? dueKeyForDate(original) : ""
+      if (dueKey !== originalKey) fields.due = dueKey
+      debugLog("action: save edit task " + task.uid + " fields=" + Object.keys(fields).join(","))
+      endEdit()
+      tasksView.activeTab = "pending"
+      if (Object.keys(fields).length > 0) calendarService.editTask(task, fields)
+    }
+
     function trySubmit() {
       if (!canSubmit) return
+      if (editing) { submitEdit(); return }
       var title = trimText(addSummaryField.text)
       var description = String(addDescriptionField.text == null ? "" : addDescriptionField.text)
       var categories = parsedCategories()
@@ -2353,14 +2465,20 @@ Column {
 
     function cancelAdd() {
       debugLog("action: add task cancel")
-      clearDraft()
-      resetCalendar()
+      if (editing) {
+        endEdit()
+      } else {
+        clearDraft()
+        resetCalendar()
+      }
       tasksView.activeTab = "pending"
     }
 
+    // Esc keeps a half-typed new task for next time, but drops an edit.
     function escapeAdd() {
       debugLog("action: add task escape")
       duePickerOpen = false
+      if (editing) endEdit()
       tasksView.activeTab = "pending"
     }
 
@@ -2411,7 +2529,7 @@ Column {
           id: addHeaderTitle
           anchors.left: parent.left
           anchors.verticalCenter: parent.verticalCenter
-          text: "New Task"
+          text: addTaskView.editing ? "Edit Task" : "New Task"
           color: Color.accent
           font.family: Style.font.family
           font.pixelSize: Style.font.body
@@ -2442,6 +2560,7 @@ Column {
 
     AddFormField {
       label: "Calendar"
+      visible: !addTaskView.editing
 
       Dropdown {
         id: addCalendarDropdown
@@ -2604,8 +2723,8 @@ Column {
       Button {
         id: addCreateButton
         Keys.forwardTo: tasksView.keyForward
-        text: "Create Task"
-        tooltipText: "Create task"
+        text: addTaskView.editing ? "Save Changes" : "Create Task"
+        tooltipText: addTaskView.editing ? "Save changes" : "Create task"
         foreground: Color.accent
         bordered: true
         focusable: true
@@ -2703,6 +2822,7 @@ Column {
     if (activeTab === "add") {
       addTaskView.beginAdd()
     } else {
+      if (addTaskView.editing) addTaskView.endEdit()
       addTaskView.releaseEditing()
     }
   }

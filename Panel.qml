@@ -200,9 +200,9 @@ Panel {
   // it follows rebinding. Entries starting with "=" are literal fixed keys.
   function hintText() {
     var specs = {
-      list: [[["cursorDown", "cursorUp"], "move"], [["toggleComplete"], "done"], [["toggleExpand"], "details"], [["deleteTask"], "delete"], [["addTask"], "new"], [["filter"], "filter"], [["help"], "all keys"]],
+      list: [[["cursorDown", "cursorUp"], "move"], [["toggleComplete"], "done"], [["editTask"], "edit"], [["toggleExpand"], "details"], [["deleteTask"], "delete"], [["addTask"], "new"], [["filter"], "filter"], [["help"], "all keys"]],
       config: [[["cursorDown", "cursorUp"], "move"], [["configActivate"], "toggle"], [["configColor"], "color"], [["connectServer"], "connect"], [["help"], "all keys"]],
-      form: [[["=Tab"], "next field"], [["formSubmit"], "create"], [["formPickDue"], "due date"], [["formCalendarNext", "formCalendarPrev"], "calendar"], [["=Esc"], "back"], [["help"], "all keys"]],
+      form: [[["=Tab"], "next field"], [["formSubmit"], tasksViewRoot.editingTask ? "save" : "create"], [["formPickDue"], "due date"], [["formCalendarNext", "formCalendarPrev"], "calendar"], [["=Esc"], "back"], [["help"], "all keys"]],
       picker: [[["pickerLeft", "pickerDown", "pickerUp", "pickerRight"], "move"], [["pickerPrevMonth", "pickerNextMonth"], "month"], [["pickerSelect"], "choose"], [["pickerClear"], "clear"], [["=Esc"], "close"]],
       palette: [[["palettePrev", "paletteNext"], "move"], [["paletteSelect"], "choose"], [["=Esc"], "close"]]
     }

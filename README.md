@@ -26,6 +26,7 @@ Everything works without the mouse. Press `?` (or `F1`) in the panel for a searc
 | `h` `l` / `Left` `Right` / `PageUp` `PageDown` | Previous / next page |
 | `x` / `Space` | Complete or reopen the task |
 | `Enter` / `o` | Show or hide details |
+| `e` | Edit the task (title, description, due date, categories) |
 | `d` / `Delete` | Delete (press twice within 4 seconds) |
 | `a` / `n` | New task |
 | `/` | Filter tasks |
@@ -34,7 +35,7 @@ Everything works without the mouse. Press `?` (or `F1`) in the panel for a searc
 | `Esc` | Back out one step, then close the panel |
 | `Tab` | Next field in forms, otherwise the next bar panel |
 
-In the new-task form: `Tab` / `Shift+Tab` move between fields, `Ctrl+Enter` creates the task, `Ctrl+D` opens the due-date picker (`h j k l` move by day and week, `H` `L` by month, `t` today, `Enter` picks, `x` clears), `Ctrl+J` / `Ctrl+K` cycle calendars and `Ctrl+L` opens the calendar list. In Config: `Enter` toggles a calendar, `c` picks its color, `s` connects a server.
+In the new-task and edit form: `Tab` / `Shift+Tab` move between fields, `Ctrl+Enter` creates or saves the task, `Ctrl+D` opens the due-date picker (`h j k l` move by day and week, `H` `L` by month, `t` today, `Enter` picks, `x` clears), `Ctrl+J` / `Ctrl+K` cycle calendars and `Ctrl+L` opens the calendar list. In Config: `Enter` toggles a calendar, `c` picks its color, `s` connects a server.
 
 To rebind, open `?`, highlight an action, press `Ctrl+E` and then the new key. `Ctrl+R` restores one default, `Ctrl+U` unbinds and `Ctrl+Shift+R` (twice) restores all. Bindings are stored in this widget's `shell.json` entry under `keyboardShortcuts`.
 
