@@ -59,6 +59,8 @@ Column {
     || addSummaryField.activeFocus
     || addDescriptionField.activeFocus
     || addCategoryField.activeFocus
+    || addStartInput.field.activeFocus
+    || addDueInput.field.activeFocus
     || caldavUrlField.activeFocus
     || caldavUsernameField.activeFocus
     || caldavPasswordField.activeFocus
@@ -377,7 +379,8 @@ Column {
       return true
     case "connectServer": openCaldavForm(); return true
     case "formSubmit": addTaskView.trySubmit(); return true
-    case "formPickDue": addTaskView.toggleDuePicker(); return true
+    case "formPickDue": addTaskView.toggleDuePicker("due"); return true
+    case "formPickStart": addTaskView.toggleDuePicker("start"); return true
     case "formCalendarPopup": addCalendarDropdown.open(); return true
     case "formCalendarNext": addTaskView.stepCalendar(1); return true
     case "formCalendarPrev": addTaskView.stepCalendar(-1); return true
@@ -390,7 +393,7 @@ Column {
     case "pickerToday": addDueGrid.cursorToday(); return true
     case "pickerSelect": addDueGrid.pickCursor(); return true
     case "pickerClear":
-      addTaskView.clearDueDate()
+      addTaskView.clearActiveDate()
       addTaskView.closeDuePicker()
       return true
     case "palettePrev": if (activePalette) activePalette.movePalette(-1); return true
@@ -714,6 +717,10 @@ Column {
     readonly property color taskCalendarColor: taskItem.task && taskItem.task.calendarColor ? taskItem.task.calendarColor : Color.muted
     readonly property bool overdue: taskItem.showOverdue && taskItem.task && TaskModel.isOverdue(taskItem.task, tasksView.now)
     readonly property bool hasCalendarName: taskItem.task && taskItem.task.calendarName
+    // Guarded here so bindings never index into a null/undefined task. The
+    // delegate's task can be cleared while bindings still reference it.
+    readonly property bool hasCategories: !!(taskItem.task && Array.isArray(taskItem.task.categories) && taskItem.task.categories.length > 0)
+    readonly property string primaryCategory: hasCategories ? String(taskItem.task.categories[0]) : ""
     readonly property real calendarNameAvailableWidth: {
       if (!hasCalendarName) return 0
       var s = metaRow.spacing
@@ -750,8 +757,7 @@ Column {
       id: tagTextMetrics
       font.family: Style.font.family
       font.pixelSize: Style.font.caption
-      text: taskItem.task && taskItem.task.categories && taskItem.task.categories.length > 0
-        ? TaskModel.plainDisplay(taskItem.task.categories[0], 40) : ""
+      text: taskItem.hasCategories ? TaskModel.plainDisplay(taskItem.primaryCategory, 40) : ""
     }
     // Icons and separator are measured too so the whole metadata-row width
     // chain is pure: no width binding reads a Text's implicitWidth, which
@@ -806,6 +812,7 @@ Column {
     readonly property string detailStatusText: taskItem.task ? statusLabel(taskItem.task.status) : ""
     readonly property string detailPriorityText: taskItem.task ? priorityLabel(taskItem.task.priority) : ""
     readonly property string detailDueText: taskItem.task ? TaskModel.formatDueDate(taskItem.task) : ""
+    readonly property string detailStartText: taskItem.task ? TaskModel.formatStartDate(taskItem.task) : ""
     readonly property string detailCompletedText: taskItem.task ? TaskModel.formatCompletedDate(taskItem.task) : ""
 
     // Collapsed rows keep the original one-line height (row + 6 = 3 top /
@@ -949,11 +956,11 @@ Column {
 
           Text {
             id: tagText
-            visible: taskItem.task && taskItem.task.categories && taskItem.task.categories.length > 0
+            visible: taskItem.hasCategories
             // Same TextMetrics reasoning as the calendar name: implicitWidth
             // latches at 0 for delegates built while the tab was hidden.
             width: visible ? Math.max(0, Math.min(tagTextMetrics.width, parent.width * 0.45 - tagIcon.width - parent.spacing)) : 0
-            text: visible ? TaskModel.plainDisplay(taskItem.task.categories[0], 40) : ""
+            text: visible ? TaskModel.plainDisplay(taskItem.primaryCategory, 40) : ""
             color: Color.muted
             elide: Text.ElideRight
             font.family: Style.font.family
@@ -1062,6 +1069,18 @@ Column {
           width: (parent.width - parent.spacing) / 2
           label: "Due"
           value: taskItem.detailDueText
+        }
+      }
+
+      Row {
+        visible: taskItem.detailStartText !== ""
+        width: parent.width
+        spacing: Style.space(6)
+
+        TaskDetailField {
+          width: (parent.width - parent.spacing) / 2
+          label: "Starts by"
+          value: taskItem.detailStartText
         }
       }
 
@@ -1452,6 +1471,77 @@ Column {
     }
   }
 
+  // Typed date field with a picker button beside it. The text is the
+  // editable view of `keyValue` (a day key). The text is committed on Enter,
+  // on focus loss, and before submit. The picker button and Ctrl+D / Ctrl+T
+  // open the shared month grid for this field.
+  component AddDateInput: Row {
+    id: dateInput
+    property string target: "due"
+    property string keyValue: ""
+    property string errorText: ""
+    readonly property alias field: dateField
+    readonly property alias pickerButton: pickButton
+    readonly property bool pickerOpen: addTaskView.duePickerOpen && addTaskView.pickerTarget === target
+
+    width: parent ? parent.width : 0
+    spacing: Style.space(4)
+
+    // Rewrite the text from the key. Skipped while the user is typing unless forced.
+    function syncText(force) {
+      if (!force && dateField.activeFocus) return
+      if (force) errorText = ""
+      dateField.text = TaskModel.formatDateInput(keyValue, addTaskView.datePattern)
+    }
+
+    onKeyValueChanged: syncText(false)
+
+    TextField {
+      id: dateField
+      Keys.forwardTo: tasksView.keyForward
+      Keys.onTabPressed: function(event) { addTaskView.formStep(1); event.accepted = true }
+      Keys.onBacktabPressed: function(event) { addTaskView.formStep(-1); event.accepted = true }
+      Keys.onEscapePressed: function(event) {
+        addTaskView.escapeAdd()
+        event.accepted = true
+      }
+      width: dateInput.width - pickButton.width - dateInput.spacing
+        - (clearButton.visible ? clearButton.width + dateInput.spacing : 0)
+      placeholderText: TaskModel.dateInputHint(addTaskView.datePattern)
+      font.family: Style.font.family
+      font.pixelSize: Style.font.bodySmall
+      onAccepted: addTaskView.commitDateInput(dateInput.target)
+      onActiveFocusChanged: {
+        if (activeFocus) {
+          // Typing takes over from the grid.
+          if (addTaskView.duePickerOpen) addTaskView.duePickerOpen = false
+        } else {
+          addTaskView.commitDateInput(dateInput.target)
+        }
+      }
+    }
+
+    Button {
+      id: pickButton
+      Keys.forwardTo: tasksView.keyForward
+      focusable: true
+      bordered: true
+      iconText: "\uf073"
+      foreground: dateInput.keyValue !== "" ? Color.accent : Color.foreground
+      tooltipText: dateInput.pickerOpen ? "Hide date picker" : "Pick a date"
+      onClicked: addTaskView.toggleDuePicker(dateInput.target)
+    }
+
+    Button {
+      id: clearButton
+      visible: dateField.text !== "" || dateInput.keyValue !== ""
+      text: "\u2715"
+      tooltipText: "Remove date"
+      fontSize: Style.font.caption
+      onClicked: addTaskView.clearDate(dateInput.target)
+    }
+  }
+
   // One day cell of the due-date mini calendar. `cell` is fed from the
   // Repeater's modelData at the use site; only instantiated under the
   // AddDuePicker, so the `dueGrid` scope reference is always resolvable.
@@ -1532,7 +1622,7 @@ Column {
           day: cellDay,
           inMonth: cellMonth === viewMonth && cellYear === viewYear,
           today: key === today,
-          selected: key === addTaskView.dueKey,
+          selected: key === addTaskView.activeKey(),
           cursor: key === cursorKey
         })
         cursor.setDate(cursor.getDate() + 1)
@@ -1598,8 +1688,8 @@ Column {
     // component scope cannot see the add view's ids directly).
     function pickCell(cell) {
       if (!cell) return
-      debugLog("action: pick due date " + cell.key)
-      addTaskView.dueKey = cell.key
+      debugLog("action: pick " + addTaskView.pickerTarget + " date " + cell.key)
+      addTaskView.setActiveKey(cell.key)
       addTaskView.closeDuePicker()
     }
 
@@ -1608,8 +1698,13 @@ Column {
     focus: visible
 
     onVisibleChanged: {
-      if (!visible) return
-      var anchor = addTaskView.parseDueKey(addTaskView.dueKey)
+      if (visible) syncToActive()
+    }
+
+    // Re-anchor on the active field's date (also used when the picker stays
+    // open and switches from one field to the other).
+    function syncToActive() {
+      var anchor = addTaskView.parseDueKey(addTaskView.activeKey())
       if (!anchor) anchor = new Date(tasksView.now)
       viewYear = anchor.getFullYear()
       viewMonth = anchor.getMonth()
@@ -2182,9 +2277,15 @@ Column {
 
     property string calendarId: ""
     property string dueKey: ""
+    property string startKey: ""
+    // Which date field the shared picker writes to: "due" or "start".
+    property string pickerTarget: "due"
     property bool duePickerOpen: false
-    property bool submitBusy: false
     property string createError: ""
+    readonly property string datePattern: TaskModel.DATE_INPUT_PATTERN
+    // Drafts of creates that were submitted and not yet confirmed, oldest
+    // first. The service confirms creates in the same order.
+    property var inFlightCreates: []
     // Edit mode reuses this form: the task being edited (null when adding)
     // and the new-task draft stashed while editing.
     property var editingTask: null
@@ -2210,8 +2311,7 @@ Column {
       return out
     }
 
-    readonly property bool canSubmit: !submitBusy
-      && (editing || calendarId !== "")
+    readonly property bool canSubmit: (editing || calendarId !== "")
       && calendarService !== null
       && trimText(addSummaryField.text).length > 0
 
@@ -2249,17 +2349,6 @@ Column {
       return new Date(year, month - 1, day)
     }
 
-    // "Mon d" this year, "Mon d, YYYY" otherwise — TaskModel.formatDueDate style.
-    function formatDueChoice(key) {
-      var date = parseDueKey(key)
-      if (!date) return ""
-      var month = TaskModel.SHORT_MONTH_NAMES[date.getMonth()]
-      var day = date.getDate()
-      var year = date.getFullYear()
-      if (year === tasksView.now.getFullYear()) return month + " " + day
-      return month + " " + day + ", " + year
-    }
-
     function hasCalendar(id) {
       var all = writableCalendars
       for (var i = 0; i < all.length; i++) {
@@ -2286,17 +2375,86 @@ Column {
       if (addCalendarDropdown) addCalendarDropdown.value = calendarId
     }
 
-    function toggleDuePicker() {
-      if (duePickerOpen) closeDuePicker()
+    function activeKey() {
+      return pickerTarget === "start" ? startKey : dueKey
+    }
+
+    function dateInputFor(target) {
+      return target === "start" ? addStartInput : addDueInput
+    }
+
+    function setDateKey(target, key) {
+      if (target === "start") startKey = key
+      else dueKey = key
+    }
+
+    function setActiveKey(key) {
+      setDateKey(pickerTarget, key)
+      dateInputFor(pickerTarget).syncText(true)
+    }
+
+    // Typed text is checked when its field loses focus, on Enter, and before
+    // a submit. Returns false (and shows the hint) when the text is no date.
+    function commitDateInput(target) {
+      var input = dateInputFor(target)
+      var text = trimText(input.field.text)
+      var key = ""
+      if (text !== "") {
+        key = TaskModel.parseDateInput(text, datePattern, tasksView.now)
+        if (key === "") {
+          input.errorText = "Enter a date as " + TaskModel.dateInputHint(datePattern) + "."
+          return false
+        }
+      }
+      setDateKey(target, key)
+      input.syncText(true)
+      return true
+    }
+
+    function commitDateInputs() {
+      var dueOk = commitDateInput("due")
+      var startOk = commitDateInput("start")
+      return dueOk && startOk
+    }
+
+    function syncDateInputs(force) {
+      addDueInput.syncText(force)
+      addStartInput.syncText(force)
+    }
+
+    // The shared Dropdown keeps its focusable trigger private; it is the
+    // first tab stop inside it.
+    function firstTabStop(item) {
+      if (!item) return null
+      if (item.activeFocusOnTab === true) return item
+      for (var i = 0; i < item.children.length; i++) {
+        var found = firstTabStop(item.children[i])
+        if (found) return found
+      }
+      return null
+    }
+
+    function calendarTrigger() {
+      return firstTabStop(addCalendarDropdown)
+    }
+
+    // One picker serves both date fields: the button that opened it names
+    // the target. Pressing the same button again closes it.
+    function toggleDuePicker(target) {
+      var next = target === "start" ? "start" : "due"
+      if (duePickerOpen && pickerTarget === next) { closeDuePicker(); return }
+      pickerTarget = next
+      if (duePickerOpen) addDueGrid.syncToActive()
       else duePickerOpen = true
     }
 
-    // Closing the picker returns the keyboard to the Due button (not the
-    // list cursor), so Tab/Shift+Tab continue from where the user was.
+    // Closing the picker returns the keyboard to the field that opened it
+    // (not the list cursor), so Tab/Shift+Tab continue from where the user was.
     function closeDuePicker() {
       if (!duePickerOpen) return
       duePickerOpen = false
-      Qt.callLater(function() { addDueTrigger.forceActiveFocus() })
+      var trigger = dateInputFor(pickerTarget).pickerButton
+      Qt.callLater(function() { trigger.forceActiveFocus() })
     }
 
     // Ctrl+J / Ctrl+K: cycle the target calendar without opening the list.
@@ -2312,24 +2470,48 @@ Column {
     }
 
     // Tab / Shift+Tab walk the form in reading order.
+    // The calendar select is left out while editing (its row is hidden).
     function focusOrder() {
-      return [addSummaryField, addDescriptionField, addDueTrigger, addCategoryField, addCreateButton, addCancelButton]
+      var out = editing ? [] : [calendarTrigger()]
+      out = out.concat([addSummaryField, addDescriptionField,
+        addStartInput.field, addStartInput.pickerButton,
+        addDueInput.field, addDueInput.pickerButton,
+        addCategoryField, addCreateButton, addCancelButton])
+      return out.filter(function(item) { return item !== null && item !== undefined })
     }
 
     function formStep(direction) {
+      if (duePickerOpen) { closeDuePicker(); return }
       var order = focusOrder()
+      if (order.length === 0) return
       var current = -1
       for (var i = 0; i < order.length; i++) if (order[i].activeFocus) { current = i; break }
-      if (duePickerOpen) { closeDuePicker(); return }
       var next = current < 0 ? (direction > 0 ? 0 : order.length - 1)
         : (current + direction + order.length) % order.length
       order[next].forceActiveFocus()
       tasksView.reveal(order[next])
     }
 
-    function clearDueDate() {
-      debugLog("action: clear due date")
-      dueKey = ""
+    function clearDate(target) {
+      debugLog("action: clear " + target + " date")
+      setDateKey(target, "")
+      dateInputFor(target).syncText(true)
+    }
+
+    function clearDueDate() { clearDate("due") }
+
+    function clearStartDate() { clearDate("start") }
+
+    function clearActiveDate() {
+      if (pickerTarget === "start") clearStartDate()
+      else clearDueDate()
+    }
+
+    // Starts by must fall before the due date. Both are day keys, so a string
+    // compare orders them. Equal days are refused too: a VTODO needs DUE after
+    // DTSTART, which strict CalDAV servers enforce.
+    function startConflict() {
+      return startKey !== "" && dueKey !== "" && startKey >= dueKey
     }
 
     function parsedCategories() {
@@ -2347,6 +2529,8 @@ Column {
       addDescriptionField.text = ""
       addCategoryField.text = ""
       dueKey = ""
+      startKey = ""
+      syncDateInputs(true)
       duePickerOpen = false
       createError = ""
     }
@@ -2366,6 +2550,7 @@ Column {
           description: addDescriptionField.text,
           category: addCategoryField.text,
           dueKey: dueKey,
+          startKey: startKey,
           calendarId: calendarId
         }
       }
@@ -2377,6 +2562,9 @@ Column {
       addCategoryField.text = (task.categories || []).join(", ")
       var due = TaskModel.parseDateTime(task.due)
       dueKey = due ? dueKeyForDate(due) : ""
+      var start = TaskModel.parseDateTime(task.start)
+      startKey = start ? dueKeyForDate(start) : ""
+      syncDateInputs(true)
       duePickerOpen = false
       createError = ""
       debugLog("action: begin edit task " + task.uid)
@@ -2394,6 +2582,8 @@ Column {
       addDescriptionField.text = draft ? draft.description : ""
       addCategoryField.text = draft ? draft.category : ""
       dueKey = draft ? draft.dueKey : ""
+      startKey = draft ? draft.startKey : ""
+      syncDateInputs(true)
       duePickerOpen = false
       createError = ""
       if (draft && hasCalendar(draft.calendarId)) calendarId = draft.calendarId
@@ -2405,6 +2595,7 @@ Column {
     function submitEdit() {
       var task = editingTask
       if (!task || !calendarService) return
+      if (!commitDateInputs()) return
       var fields = {}
       var title = trimText(addSummaryField.text)
       if (title !== String(task.title || "")) fields.title = title
@@ -2415,6 +2606,15 @@ Column {
       var original = TaskModel.parseDateTime(task.due)
       var originalKey = original ? dueKeyForDate(original) : ""
       if (dueKey !== originalKey) fields.due = dueKey
+      var originalStart = TaskModel.parseDateTime(task.start)
+      var originalStartKey = originalStart ? dueKeyForDate(originalStart) : ""
+      if (startKey !== originalStartKey) fields.dtstart = startKey
+      // Only dates the user touched are checked, so an older conflicting
+      // task can still be renamed.
+      if ((fields.due !== undefined || fields.dtstart !== undefined) && startConflict()) {
+        createError = "Starts by must be before the due date."
+        return
+      }
       debugLog("action: save edit task " + task.uid + " fields=" + Object.keys(fields).join(","))
       endEdit()
       tasksView.activeTab = "pending"
@@ -2423,44 +2623,74 @@ Column {
 
     function trySubmit() {
       if (!canSubmit) return
+      if (!commitDateInputs()) return
       if (editing) { submitEdit(); return }
+      if (startConflict()) {
+        createError = "Starts by must be before the due date."
+        return
+      }
       var title = trimText(addSummaryField.text)
       var description = String(addDescriptionField.text == null ? "" : addDescriptionField.text)
       var categories = parsedCategories()
+      var due = dueKey
+      var start = startKey
+      var target = calendarId
+      debugLog("action: create task calendar=" + target + " due=" + (due !== "" ? due : "(none)") + " start=" + (start !== "" ? start : "(none)") + " title=" + title)
+      // The form clears and the list shows the task at once. The service
+      // reports the outcome later; a failure restores this draft.
+      inFlightCreates = inFlightCreates.concat([{
+        title: title,
+        summary: addSummaryField.text,
+        description: addDescriptionField.text,
+        category: addCategoryField.text,
+        dueKey: due,
+        startKey: start,
+        calendarId: target
+      }])
       createError = ""
-      submitBusy = true
-      addSubmitSafety.restart()
-      debugLog("action: create task calendar=" + calendarId + " due=" + (dueKey !== "" ? dueKey : "(none)") + " title=" + title)
-      // Stay on the form until the service confirms the create: switching
-      // to Pending early threw the draft away whenever the helper rejected
-      // it (bad auth, wrong provider...), leaving only a flash of red.
-      // Priority stays at its service default.
+      clearDraft()
+      tasksView.activeTab = "pending"
       if (calendarService) {
-        calendarService.createTask(calendarId, title, dueKey, undefined, description, categories)
+        // Priority stays at its service default.
+        calendarService.createTask(target, title, due, undefined, description, categories, start)
       }
     }
 
     function handleCreateSuccess() {
-      if (!submitBusy) return
-      addSubmitSafety.stop()
-      submitBusy = false
-      clearDraft()
-      tasksView.activeTab = "pending"
+      if (inFlightCreates.length === 0) return
+      inFlightCreates = inFlightCreates.slice(1)
     }
 
+    // Restore the failed draft into the form when the user is not already
+    // typing a new one. Otherwise keep the error visible with the failed
+    // title, so nothing is silently dropped.
     function handleCreateFailure(reason) {
-      if (!submitBusy) return
-      addSubmitSafety.stop()
-      submitBusy = false
-      // Draft (summary, description, due, categories, calendar) is kept so
-      // the user can fix the cause and resubmit without retyping.
-      createError = "Couldn't create the task: " + String(reason || "something went wrong")
-    }
-
-    function handleCreateTimeout() {
-      if (!submitBusy) return
-      submitBusy = false
-      createError = "Create timed out — try again."
+      var draft = inFlightCreates.length > 0 ? inFlightCreates[0] : null
+      inFlightCreates = inFlightCreates.slice(1)
+      var label = draft && draft.title ? " \"" + String(draft.title).slice(0, 60) + "\"" : ""
+      var message = "Couldn't create the task" + label + ": " + String(reason || "something went wrong")
+      if (!draft) {
+        createError = message
+        return
+      }
+      if (tasksView.activeTab !== "add") {
+        if (trimText(addSummaryField.text) === "" && !editing) {
+          addSummaryField.text = draft.summary
+          addDescriptionField.text = draft.description
+          addCategoryField.text = draft.category
+          dueKey = draft.dueKey
+          startKey = draft.startKey
+          syncDateInputs(true)
+          if (hasCalendar(draft.calendarId)) calendarId = draft.calendarId
+          else resetCalendar()
+          addCalendarDropdown.value = calendarId
+          createError = message
+          tasksView.activeTab = "add"
+        }
+        // Otherwise the pending list keeps the service error on screen.
+        return
+      }
+      createError = message
     }
 
     function cancelAdd() {
@@ -2501,19 +2731,14 @@ Column {
     function restorePanelFocus() {
       if (!tasksView.opened) return
       if (addSummaryField.activeFocus || addDescriptionField.activeFocus || addCategoryField.activeFocus) return
+      if (addStartInput.field.activeFocus || addDueInput.field.activeFocus) return
+      // Closing the calendar list keeps keyboard focus on its trigger.
+      var trigger = editing ? null : calendarTrigger()
+      if (trigger) { trigger.forceActiveFocus(); return }
       if (panel && typeof panel.focusKeyCatcher === "function") panel.focusKeyCatcher()
     }
 
     onWritableCalendarsChanged: if (calendarId === "" || !hasCalendar(calendarId)) resetCalendar()
-
-    // In-flight guard rather than a click debounce: submitBusy releases only
-    // when the service reports success or failure. If neither ever arrives
-    // (hung helper), this re-enables the form so it cannot dead-end.
-    Timer {
-      id: addSubmitSafety
-      interval: 15000
-      onTriggered: addTaskView.handleCreateTimeout()
-    }
 
     // --- Add-task layout --------------------------------------------------
 
@@ -2651,40 +2876,52 @@ Column {
     }
 
     AddFormField {
+      label: "Starts by"
+
+      AddDateInput {
+        id: addStartInput
+        target: "start"
+        keyValue: addTaskView.startKey
+      }
+
+      Text {
+        visible: addStartInput.errorText !== ""
+        width: parent.width
+        text: addStartInput.errorText
+        color: Color.urgent
+        wrapMode: Text.WordWrap
+        font.family: Style.font.family
+        font.pixelSize: Style.font.caption
+        textFormat: Text.PlainText
+      }
+    }
+
+    AddFormField {
       label: "Due"
 
-      Row {
+      AddDateInput {
+        id: addDueInput
+        target: "due"
+        keyValue: addTaskView.dueKey
+      }
+
+      Text {
+        visible: addDueInput.errorText !== ""
         width: parent.width
-        spacing: Style.space(4)
-
-        Button {
-          id: addDueTrigger
-          Keys.forwardTo: tasksView.keyForward
-          width: parent.width - (addDueClear.visible ? addDueClear.width + parent.spacing : 0)
-          leftAlign: true
-          bordered: true
-          focusable: true
-          iconText: "\uf073"
-          text: addTaskView.dueKey !== "" ? addTaskView.formatDueChoice(addTaskView.dueKey) : "No due date"
-          foreground: addTaskView.dueKey !== "" ? Color.accent : Color.foreground
-          tooltipText: addTaskView.duePickerOpen ? "Hide date picker" : "Pick a due date"
-          onClicked: addTaskView.toggleDuePicker()
-        }
-
-        Button {
-          id: addDueClear
-          visible: addTaskView.dueKey !== ""
-          text: "\u2715"
-          tooltipText: "Remove due date"
-          fontSize: Style.font.caption
-          onClicked: addTaskView.clearDueDate()
-        }
+        text: addDueInput.errorText
+        color: Color.urgent
+        wrapMode: Text.WordWrap
+        font.family: Style.font.family
+        font.pixelSize: Style.font.caption
+        textFormat: Text.PlainText
       }
+    }
 
-      AddDuePicker {
-        id: addDueGrid
-        visible: addTaskView.duePickerOpen
-      }
+    // Shared by both date fields; it sits under the Due field and writes to
+    // whichever field opened it.
+    AddDuePicker {
+      id: addDueGrid
+      visible: addTaskView.duePickerOpen
     }
 
     AddFormField {

@@ -1287,7 +1287,7 @@ def caldav_vtodo_updated_document(text: str, title: str, due: datetime | None, d
     return "\r\n".join(lines) + "\r\n"
 
 
-EDITABLE_TASK_FIELDS = ("title", "description", "due", "categories", "priority")
+EDITABLE_TASK_FIELDS = ("title", "description", "due", "dtstart", "categories", "priority")
 
 
 def parse_task_edit_payload(raw: str) -> dict:
@@ -1313,6 +1313,8 @@ def parse_task_edit_payload(raw: str) -> dict:
         edits["description"] = str(payload.get("description") or "")
     if "due" in payload:
         edits["due"] = str(payload.get("due") or "")
+    if "dtstart" in payload:
+        edits["dtstart"] = str(payload.get("dtstart") or "")
     if "categories" in payload:
         raw_categories = payload.get("categories")
         if isinstance(raw_categories, str):
@@ -1342,6 +1344,19 @@ def vtodo_edited_document(text: str, edits: dict) -> str:
     if "due" in edits:
         due = parse_event_instant(edits["due"]) if edits["due"] else None
         changes["DUE"] = f"DUE:{ics_datetime(due, False)}" if due else None
+    explicit_start = "dtstart" in edits
+    if explicit_start:
+        start = parse_event_instant(edits["dtstart"]) if edits["dtstart"] else None
+        changes["DTSTART"] = f"DTSTART:{ics_datetime(start, False)}" if start else None
+        if start is not None:
+            stored_due = due
+            if stored_due is None and "due" not in edits:
+                for line in unfolded:
+                    if line.split(":", 1)[0].split(";", 1)[0].strip().upper() == "DUE" and ":" in line:
+                        stored_due = parse_ical_datetime(line.split(":", 1)[1].strip())
+                        break
+            if stored_due is not None and start >= stored_due:
+                raise ValueError("Starts by must be before the due date.")
     if "categories" in edits:
         cats = edits["categories"]
         changes["CATEGORIES"] = f"CATEGORIES:{','.join(ics_escape(c) for c in cats)}" if cats else None
@@ -1349,7 +1364,7 @@ def vtodo_edited_document(text: str, edits: dict) -> str:
         changes["PRIORITY"] = f"PRIORITY:{edits['priority']}" if edits["priority"] > 0 else None
     # Strict CalDAV servers reject DUE that does not come after DTSTART; when
     # the edit moves DUE to or before the stored DTSTART, drop that DTSTART.
-    if due is not None:
+    if due is not None and not explicit_start:
         for line in unfolded:
             name = line.split(":", 1)[0].split(";", 1)[0].strip().upper()
             if name == "DTSTART" and ":" in line:
@@ -3403,6 +3418,8 @@ def main(argv: list[str]) -> int:
             # create/update with today's midnight, producing DUE<=DTSTART
             # objects that strict CalDAV servers reject on update).
             dtstart = parse_event_instant(task["dtstart"]) if task["dtstart"] else None
+            if dtstart is not None and due is not None and dtstart >= due:
+                raise ValueError("Starts by must be before the due date.")
             if args.provider == "caldav":
                 return emit_json(create_task_caldav(args.calendar_id, task["title"], due, task["description"], task["categories"], task["priority"], task["status"], task["percent_complete"], dtstart))
             return emit_json(create_task_eds(args.calendar_id, task["title"], due, task["description"], task["categories"], task["priority"], task["status"], task["percent_complete"], dtstart))

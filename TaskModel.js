@@ -30,6 +30,7 @@ function normalizedTask(raw) {
     uid: String(task.uid || ''),
     title: plainDisplay(task.title || task.summary || '(No title)', 400) || '(No title)',
     due: String(task.due || ''),
+    start: String(task.start || ''),
     completed: String(task.completed || ''),
     status: String(task.status || 'NEEDS-ACTION'),
     priority: String(task.priority || ''),
@@ -203,9 +204,9 @@ function parseHelperResponse(text) {
   }
 }
 
-function formatDueDate(task, timeFormat) {
-  if (!task || !task.due) return ''
-  var date = parseDateTime(task.due)
+// "Mon d" this year, "Mon d, YYYY" otherwise, for any stored task date.
+function formatTaskDate(value) {
+  var date = parseDateTime(value)
   if (!date) return ''
   var month = SHORT_MONTH_NAMES[date.getMonth()]
   var day = date.getDate()
@@ -213,6 +214,88 @@ function formatDueDate(task, timeFormat) {
   var now = new Date()
   if (year === now.getFullYear()) return month + ' ' + day
   return month + ' ' + day + ', ' + year
+}
+
+function formatDueDate(task, timeFormat) {
+  if (!task || !task.due) return ''
+  return formatTaskDate(task.due)
+}
+
+function formatStartDate(task) {
+  if (!task || !task.start) return ''
+  return formatTaskDate(task.start)
+}
+
+// --- Typed date input -------------------------------------------------------
+// The due and starts-by fields take a date typed as DD.MM.YYYY, always, so the
+// same keys mean the same thing on every locale.
+var DATE_INPUT_PATTERN = 'dd.MM.yyyy'
+
+function padTwo(value) {
+  var s = String(value)
+  return s.length < 2 ? '0' + s : s
+}
+
+// Placeholder text such as "DD.MM.YYYY" for a pattern.
+function dateInputHint(pattern) {
+  return String(pattern || DATE_INPUT_PATTERN).replace(/d+/g, 'DD').replace(/M+/g, 'MM').replace(/y+/g, 'YYYY')
+}
+
+// Typed text -> day key 'YYYY-MM-DD', or '' when it is not a real date.
+// Accepts separators (space . / - ,), a missing year (current year), two-digit
+// years, and eight digits with no separators.
+function parseDateInput(text, pattern, now) {
+  var s = String(text == null ? '' : text).replace(/^\s+|\s+$/g, '')
+  var order = (pattern || DATE_INPUT_PATTERN).match(/[dMy]+/g) || []
+  order = order.map(function (token) { return token.charAt(0) })
+  var parts = null
+  var fields = order
+  if (/^\d{8}$/.test(s) && order.length === 3) {
+    parts = []
+    var at = 0
+    for (var k = 0; k < order.length; k++) {
+      var width = order[k] === 'y' ? 4 : 2
+      parts.push(s.substr(at, width))
+      at += width
+    }
+  } else if (/^\d+([\s.\/\-,]+\d+){1,2}$/.test(s)) {
+    parts = s.split(/[\s.\/\-,]+/)
+    if (parts.length === 2) fields = order.filter(function (f) { return f !== 'y' })
+    if (parts.length !== fields.length) return ''
+  }
+  if (!parts || parts.length !== fields.length) return ''
+  var values = {}
+  var year = now ? now.getFullYear() : new Date().getFullYear()
+  for (var i = 0; i < fields.length; i++) {
+    if (fields[i] === 'y') {
+      if (parts[i].length === 3 || parts[i].length > 4) return ''
+      year = parseInt(parts[i], 10)
+      if (parts[i].length <= 2) year += 2000
+    } else {
+      values[fields[i]] = parseInt(parts[i], 10)
+    }
+  }
+  var day = values.d
+  var month = values.M
+  if (year < 1000 || !(month >= 1 && month <= 12) || !(day >= 1 && day <= 31)) return ''
+  var date = new Date(year, month - 1, day)
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return ''
+  return year + '-' + padTwo(month) + '-' + padTwo(day)
+}
+
+// Day key 'YYYY-MM-DD' -> text in the pattern, or '' for an empty key.
+function formatDateInput(key, pattern) {
+  var match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(key || ''))
+  if (!match) return ''
+  var year = parseInt(match[1], 10)
+  var month = parseInt(match[2], 10)
+  var day = parseInt(match[3], 10)
+  return (pattern || DATE_INPUT_PATTERN).replace(/d+|M+|y+/g, function (token) {
+    var letter = token.charAt(0)
+    if (letter === 'y') return token.length === 2 ? padTwo(year % 100) : String(year)
+    var value = letter === 'd' ? day : month
+    return token.length === 2 ? padTwo(value) : String(value)
+  })
 }
 
 function formatCompletedDate(task, timeFormat) {
@@ -323,7 +406,12 @@ if (typeof module !== 'undefined') module.exports = {
   filterTasks,
   parseHelperResponse,
   formatDueDate,
+  formatStartDate,
   formatCompletedDate,
+  DATE_INPUT_PATTERN,
+  dateInputHint,
+  parseDateInput,
+  formatDateInput,
   canToggleCalendar,
   serverConnections,
   providerLabel,

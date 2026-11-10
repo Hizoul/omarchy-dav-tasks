@@ -69,4 +69,30 @@ bare = "BEGIN:VCALENDAR\r\nBEGIN:VTODO\r\nUID:x2\r\nSUMMARY:S\r\nEND:VTODO\r\nEN
 out = lines(helper.vtodo_edited_document(bare, {"categories": ["z"], "priority": 2}))
 assert out.index("CATEGORIES:z") < out.index("END:VTODO") and "PRIORITY:2" in out
 
+# starts-by (DTSTART): payload parsing, set, move and clear
+edits = helper.parse_task_edit_payload('{"dtstart":"2026-10-01"}')
+assert edits == {"dtstart": "2026-10-01"}, edits
+out = lines(helper.vtodo_edited_document(SOURCE, {"dtstart": "2026-10-05"}))
+assert "DTSTART:20261005T000000Z" in out and "DUE:20261110T000000Z" in out
+assert not any(line == "DTSTART:20261101T000000Z" for line in out)
+out = lines(helper.vtodo_edited_document(SOURCE, {"dtstart": ""}))
+assert not any(line.startswith("DTSTART") for line in out) and "DUE:20261110T000000Z" in out
+# a start on or after the due date is refused (stored or edited due)
+for edit in ({"dtstart": "2026-11-10"}, {"dtstart": "2026-12-01"}):
+    try:
+        helper.vtodo_edited_document(SOURCE, edit)
+    except ValueError as error:
+        assert "Starts by" in str(error)
+    else:
+        raise SystemExit(f"not ok - start {edit} at/after due should be refused")
+try:
+    helper.vtodo_edited_document(SOURCE, {"dtstart": "2026-10-20", "due": "2026-10-15"})
+except ValueError:
+    pass
+else:
+    raise SystemExit("not ok - start after edited due should be refused")
+# an explicit start wins over the due-date repair that drops a stored DTSTART
+out = lines(helper.vtodo_edited_document(SOURCE, {"due": "2026-10-30", "dtstart": "2026-10-10"}))
+assert "DTSTART:20261010T000000Z" in out and "DUE:20261030T000000Z" in out
+
 print("ok - helper edit-task rewrite")

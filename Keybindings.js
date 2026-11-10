@@ -84,6 +84,7 @@ var ACTIONS = [
 
   { id: "formSubmit", label: "Create or save task", category: "New task form", contexts: ["form"], defaults: ["Ctrl+Enter"], keywords: "save submit add" },
   { id: "formPickDue", label: "Open due date picker", category: "New task form", contexts: ["form"], defaults: ["Ctrl+d"], keywords: "calendar date deadline" },
+  { id: "formPickStart", label: "Open starts-by date picker", category: "New task form", contexts: ["form"], defaults: ["Ctrl+t"], keywords: "calendar date begin start" },
   { id: "formCalendarPopup", label: "Choose calendar from list", category: "New task form", contexts: ["form"], defaults: ["Ctrl+l"], keywords: "list target dropdown" },
   { id: "formCalendarNext", label: "Next calendar", category: "New task form", contexts: ["form"], defaults: ["Ctrl+j"], keywords: "list target" },
   { id: "formCalendarPrev", label: "Previous calendar", category: "New task form", contexts: ["form"], defaults: ["Ctrl+k"], keywords: "list target" },
