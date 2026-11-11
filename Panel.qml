@@ -276,7 +276,7 @@ Panel {
     open: root.opened
     centerOnBar: false
     focusTarget: keyCatcher
-    contentWidth: panel.fittedContentWidth(Style.space(560))
+    contentWidth: panel.fittedContentWidth(tasksViewRoot.wideMode && panel.availableCardWidth > 0 ? panel.availableCardWidth : Style.space(560))
     // Fixed content height: the frame stays stable across tabs, pages, and
     // expanded rows. 560 fits the pending tab's worst common case at the
     // default scale — tab row + two sections, each reserving a full page of
@@ -346,7 +346,7 @@ Panel {
 
           Column {
             id: calendarColumn
-            width: Math.min(parent.width, Style.space(520))
+            width: tasksViewRoot.wideMode ? parent.width : Math.min(parent.width, Style.space(520))
             anchors.horizontalCenter: parent.horizontalCenter
             spacing: Style.space(12)
 
@@ -394,6 +394,13 @@ Panel {
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Style.space(6)
                 Button {
+                  id: wideButton
+                  visible: tasksViewRoot.activeTab === "pending"
+                  iconText: "\uf065"
+                  tooltipText: tasksViewRoot.wideMode ? "Normal width (F11)" : "Wide view: more columns (F11)"
+                  onClicked: tasksViewRoot.toggleWide()
+                }
+                Button {
                   id: addTaskButton
                   text: "Add Task"
                   iconText: "\uf067"
@@ -438,6 +445,7 @@ Panel {
               panel: root
               viewMode: root.viewMode
               opened: root.opened
+              viewport: calendarScroll
               // Tabs swap whole content blocks; start each one at the top
               // instead of inheriting the previous tab's scroll offset.
               onActiveTabChanged: calendarScroll.contentY = 0

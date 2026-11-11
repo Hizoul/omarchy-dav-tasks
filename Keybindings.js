@@ -58,6 +58,7 @@ var EVERYWHERE = ["list", "config", "form"]
 var ACTIONS = [
   { id: "help", label: "Show keyboard shortcuts", category: "Application", contexts: EVERYWHERE, defaults: ["?", "F1"], keywords: "help keys cheatsheet overview" },
   { id: "sync", label: "Sync now", category: "Application", contexts: EVERYWHERE, defaults: ["r", "Ctrl+r"], keywords: "refresh reload fetch" },
+  { id: "wide", label: "Wide view: more pages as columns", category: "Application", contexts: EVERYWHERE, defaults: ["F11"], keywords: "fullscreen expand columns pages width" },
   { id: "addTask", label: "New task", category: "Application", contexts: LISTS, defaults: ["a", "n"], keywords: "add create todo" },
   { id: "tabPending", label: "Show pending tasks", category: "Application", contexts: LISTS, defaults: ["1"], keywords: "tab upcoming backlog" },
   { id: "tabDone", label: "Show completed tasks", category: "Application", contexts: LISTS, defaults: ["2"], keywords: "tab done finished" },

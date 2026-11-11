@@ -44,6 +44,15 @@ Column {
   property int configIndex: 0
   // Color palette popup currently open on a config row (null when closed).
   property var activePalette: null
+  // Wide view (F11): the pending tab lays every page out as a column across
+  // the panel. Rows per column follow the height of the scroll area `viewport`.
+  property bool wideMode: false
+  property var viewport: null
+  readonly property real wideColumnWidth: Style.space(350)
+  readonly property real wideHeaderHeight: wideHeaderProbe.implicitHeight + Style.space(4) + 1
+  readonly property real wideAvailableHeight: viewport
+    ? Math.max(0, viewport.height - tasksView.mapToItem(viewport.contentItem, 0, 0).y - pendingColumn.y)
+    : 0
 
   readonly property var navSections: activeTab === "pending" ? [upcomingSection, backlogSection]
     : activeTab === "done" ? [doneSection] : []
@@ -130,7 +139,32 @@ Column {
 
   // Reveal after layout settles; owned by the view (not a delegate) so a
   // row rebuilt in between can't leave a dangling callback.
+  function setWide(on) {
+    if (wideMode === on) return
+    wideMode = on
+    upcomingSection.page = 1
+    backlogSection.page = 1
+    resetCursor()
+    scheduleReveal()
+  }
+  function toggleWide() { setWide(!wideMode) }
+  // Scroll the wide strip so the cursor's page column is fully visible.
+  function revealWide() {
+    var section = currentSection()
+    if (activeTab !== "pending" || (section !== upcomingSection && section !== backlogSection)) return
+    if (section.tasks.length === 0) return
+    var block = section === upcomingSection ? wideUpcoming : wideBacklog
+    var column = block.pageItem(section.currentPage - 1)
+    if (!column) return
+    var left = column.mapToItem(wideStrip.contentItem, 0, 0).x
+    var right = left + column.width
+    var x = wideStrip.contentX
+    if (left < x) x = left
+    else if (right > x + wideStrip.width) x = right - wideStrip.width
+    wideStrip.contentX = Math.max(0, Math.min(x, Math.max(0, wideStrip.contentWidth - wideStrip.width)))
+  }
   function revealCurrent() {
+    if (wideMode) { revealWide(); return }
     var item = keyContext === "list" ? currentItem() : null
     if (item) reveal(item)
   }
@@ -320,6 +354,7 @@ Column {
       addTaskView.escapeAdd()
       return true
     }
+    if (wideMode) { setWide(false); return true }
     if (filterField.activeFocus) {
       filterField.focus = false
       focusPanel()
@@ -341,6 +376,7 @@ Column {
     switch (id) {
     case "help": if (panel) panel.openHelp(); return true
     case "sync": if (panel) panel.refresh(); return true
+    case "wide": toggleWide(); return true
     case "addTask": activeTab = "add"; return true
     case "tabPending": activeTab = "pending"; return true
     case "tabDone": activeTab = "done"; return true
@@ -451,17 +487,27 @@ Column {
     // slicing; the Repeater renders only the current page.
     property int pageSize: 5
     property int page: 1
-    readonly property int pageCount: Math.max(1, Math.ceil(tasks.length / pageSize))
+    readonly property int pageCount: tasksView.wideMode ? Math.max(1, widePageRows.length) : Math.max(1, Math.ceil(tasks.length / pageSize))
     // Clamped read-only view of `page`, so a shrunken list can never drive
     // the slice or the pager label out of range.
     readonly property int currentPage: Math.min(Math.max(page, 1), pageCount)
-    readonly property var pageTasks: tasks.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+    readonly property var pageTasks: tasksView.wideMode ? (widePageRows[currentPage - 1] || []) : tasks.slice((currentPage - 1) * pageSize, currentPage * pageSize)
     // Exactly pageSize slots whenever the section is populated: real tasks
     // for the first pageTasks.length entries, null fillers after. The
     // Repeater therefore always lays out a full page, so a short list can
     // never shrink the section and pull the next one up. Section height
     // falls out of the Column's natural layout — no height overrides and no
     // cross-item measurements that could defer or latch.
+    // Wide view: rows packed into columns by measured height (see WidePages).
+    property var widePageRows: []
+    onWidePageRowsChanged: Qt.callLater(tasksView.clampCursor)
+    // Keyboard cursor sits on this row of the given page.
+    function cursorOn(p, row) {
+      return tasksView.keyContext === "list"
+        && tasksView.navSections.indexOf(taskSection) === tasksView.cursorSection
+        && p === currentPage && row === tasksView.cursorRow
+    }
+    onPageChanged: tasksView.scheduleReveal()
     readonly property var pageSlots: {
       if (tasks.length === 0) return []
       var slots = []
@@ -633,6 +679,128 @@ Column {
     }
   }
 
+  // Wide view header: section title plus page number, with the accent rule.
+  component WideHeader: Column {
+    id: wideHeader
+    property string label: ""
+    width: tasksView.wideColumnWidth
+    spacing: Style.space(4)
+    Text {
+      width: parent.width
+      text: wideHeader.label
+      color: Color.accent
+      font.family: Style.font.family
+      font.pixelSize: Style.font.body
+      font.bold: true
+      textFormat: Text.PlainText
+      elide: Text.ElideRight
+    }
+    Rectangle {
+      width: parent.width
+      height: 1
+      color: Color.accent
+    }
+  }
+  // One section in the wide view: a column per page, each filled to the rows
+  // that fit the height. Empty sections show their empty text instead.
+  component WidePages: Row {
+    id: widePages
+    property var section: null
+    spacing: Style.space(12)
+    function pageItem(index) { return pageRepeater.itemAt(index) }
+    // Real row heights: every task is rendered once, off-screen, at column
+    // width. Its height is read back and the rows are packed into columns by
+    // how much height they take, so wrapped titles are counted.
+    Item {
+      width: 0
+      height: 0
+      clip: true
+      visible: tasksView.wideMode
+      Column {
+        width: tasksView.wideColumnWidth
+        Repeater {
+          id: measureRepeater
+          model: tasksView.wideMode && widePages.section !== null ? widePages.section.tasks : []
+          TaskItem {
+            required property var modelData
+            width: tasksView.wideColumnWidth
+            task: modelData
+            showOverdue: widePages.section.showOverdue
+            dateLabel: widePages.section.dateLabel
+          }
+        }
+      }
+    }
+    readonly property var rowHeights: {
+      var out = []
+      var count = measureRepeater.count
+      for (var i = 0; i < count; i++) {
+        var item = measureRepeater.itemAt(i)
+        out.push(item ? item.height : 0)
+      }
+      return out
+    }
+    readonly property var packedRows: {
+      var out = []
+      if (!tasksView.wideMode || widePages.section === null) return out
+      var tasks = widePages.section.tasks
+      var budget = tasksView.wideAvailableHeight - tasksView.wideHeaderHeight + Style.space(4)
+      var page = []
+      var used = 0
+      for (var i = 0; i < tasks.length; i++) {
+        var cost = (rowHeights[i] || 0) + Style.space(4)
+        if (page.length > 0 && used + cost > budget) { out.push(page); page = []; used = 0 }
+        page.push(tasks[i])
+        used += cost
+      }
+      if (page.length > 0) out.push(page)
+      return out
+    }
+    Binding {
+      when: widePages.section !== null
+      target: widePages.section
+      property: "widePageRows"
+      value: widePages.packedRows
+    }
+    Column {
+      visible: widePages.section !== null && widePages.section.tasks.length === 0
+      width: tasksView.wideColumnWidth
+      spacing: Style.space(4)
+      WideHeader { label: widePages.section ? widePages.section.title : "" }
+      Text {
+        width: parent.width
+        text: widePages.section ? widePages.section.emptyText : ""
+        color: Color.muted
+        font.family: Style.font.family
+        font.pixelSize: Style.font.bodySmall
+        textFormat: Text.PlainText
+        wrapMode: Text.WordWrap
+      }
+    }
+    Repeater {
+      id: pageRepeater
+      model: widePages.section !== null && widePages.section.tasks.length > 0 ? widePages.section.pageCount : 0
+      Column {
+        id: pageColumn
+        required property int index
+        width: tasksView.wideColumnWidth
+        spacing: Style.space(4)
+        WideHeader { label: widePages.section.title + " " + (pageColumn.index + 1) + "/" + widePages.section.pageCount }
+        Repeater {
+          model: widePages.section.widePageRows[pageColumn.index] || []
+          TaskItem {
+            required property var modelData
+            required property int index
+            cursor: widePages.section.cursorOn(pageColumn.index + 1, index)
+            width: tasksView.wideColumnWidth
+            task: modelData
+            showOverdue: widePages.section.showOverdue
+            dateLabel: widePages.section.dateLabel
+          }
+        }
+      }
+    }
+  }
   component TaskItem: Rectangle {
     id: taskItem
     property var task: null
@@ -888,7 +1056,9 @@ Column {
           width: parent.width
           text: taskItem.task ? TaskModel.plainDisplay(taskItem.task.title, 200) : ""
           color: taskItem.overdue ? Color.urgent : Color.foreground
-          elide: Text.ElideRight
+          // Wide view wraps long titles; the normal list keeps them on one line.
+          wrapMode: tasksView.wideMode ? Text.WordWrap : Text.NoWrap
+          elide: tasksView.wideMode ? Text.ElideNone : Text.ElideRight
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
           font.bold: taskItem.overdue
@@ -1855,9 +2025,19 @@ Column {
     }
   }
 
+  // Invisible measurement of the wide column header (its height is read).
+  Text {
+    id: wideHeaderProbe
+    visible: false
+    text: "Upcoming 1/1"
+    font.family: Style.font.family
+    font.pixelSize: Style.font.body
+    font.bold: true
+  }
   // Pending tab content
   Column {
-    visible: tasksView.activeTab === "pending"
+    id: pendingColumn
+    visible: tasksView.activeTab === "pending" && !tasksView.wideMode
     width: parent.width
     spacing: Style.space(12)
 
@@ -1882,6 +2062,42 @@ Column {
     }
   }
 
+  // Wide view: every page of Upcoming and Backlog as columns, scrolled
+  // horizontally so the cursor's column stays in view.
+  Item {
+    id: wideBlock
+    width: parent.width
+    height: tasksView.wideAvailableHeight
+    visible: tasksView.activeTab === "pending" && tasksView.wideMode
+    Flickable {
+      id: wideStrip
+      anchors.fill: parent
+      clip: true
+      contentWidth: wideRow.width
+      contentHeight: height
+      boundsBehavior: Flickable.StopAtBounds
+      flickableDirection: Flickable.HorizontalFlick
+      ScrollBar.horizontal: ScrollBar { policy: ScrollBar.AsNeeded }
+      Row {
+        id: wideRow
+        height: wideStrip.height
+        spacing: Style.space(12)
+        WidePages {
+          id: wideUpcoming
+          section: upcomingSection
+        }
+        Rectangle {
+          width: 1
+          height: wideRow.height
+          color: Color.muted
+        }
+        WidePages {
+          id: wideBacklog
+          section: backlogSection
+        }
+      }
+    }
+  }
   // Done tab content
   Column {
     visible: tasksView.activeTab === "done"
