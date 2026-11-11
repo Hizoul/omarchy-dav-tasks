@@ -2311,6 +2311,21 @@ Column {
       return out
     }
 
+    // While editing, a task can only move within its own provider (the helper
+    // copies it between calendars of the same backend).
+    readonly property var editCalendarOptions: {
+      var out = []
+      var all = calendarService && calendarService.calendars ? calendarService.calendars : []
+      var taskCalendarId = editingTask ? String(editingTask.calendarId || "") : ""
+      var provider = ""
+      for (var i = 0; i < all.length; i++) if (all[i] && String(all[i].id) === taskCalendarId) provider = String(all[i].provider || "")
+      for (var j = 0; j < writableCalendars.length; j++) {
+        var calendar = writableCalendars[j]
+        if (String(calendar.provider || "") === provider) out.push({ value: String(calendar.id), label: TaskModel.calendarChoiceLabel(calendar, {}) })
+      }
+      return out
+    }
+
     readonly property bool canSubmit: (editing || calendarId !== "")
       && calendarService !== null
       && trimText(addSummaryField.text).length > 0
@@ -2470,9 +2485,8 @@ Column {
     }
 
     // Tab / Shift+Tab walk the form in reading order.
-    // The calendar select is left out while editing (its row is hidden).
     function focusOrder() {
-      var out = editing ? [] : [calendarTrigger()]
+      var out = [calendarTrigger()]
       out = out.concat([addSummaryField, addDescriptionField,
         addStartInput.field, addStartInput.pickerButton,
         addDueInput.field, addDueInput.pickerButton,
@@ -2603,6 +2617,7 @@ Column {
       if (description !== String(task.description || "")) fields.description = description
       var categories = parsedCategories()
       if (categories.join("\u0001") !== (task.categories || []).join("\u0001")) fields.categories = categories
+      if (String(calendarId) !== String(task.calendarId || "")) fields.calendarId = String(calendarId)
       var original = TaskModel.parseDateTime(task.due)
       var originalKey = original ? dueKeyForDate(original) : ""
       if (dueKey !== originalKey) fields.due = dueKey
@@ -2729,11 +2744,11 @@ Column {
     // Hand the keyboard back to the panel cursor unless a field still
     // holds focus (the shared Dropdown and picker close without doing it).
     function restorePanelFocus() {
-      if (!tasksView.opened) return
+      if (!tasksView.opened || tasksView.activeTab !== "add") return
       if (addSummaryField.activeFocus || addDescriptionField.activeFocus || addCategoryField.activeFocus) return
       if (addStartInput.field.activeFocus || addDueInput.field.activeFocus) return
       // Closing the calendar list keeps keyboard focus on its trigger.
-      var trigger = editing ? null : calendarTrigger()
+      var trigger = calendarTrigger()
       if (trigger) { trigger.forceActiveFocus(); return }
       if (panel && typeof panel.focusKeyCatcher === "function") panel.focusKeyCatcher()
     }
@@ -2785,13 +2800,12 @@ Column {
 
     AddFormField {
       label: "Calendar"
-      visible: !addTaskView.editing
 
       Dropdown {
         id: addCalendarDropdown
         width: parent.width
         showLabel: false
-        options: addTaskView.calendarOptions
+        options: addTaskView.editing ? addTaskView.editCalendarOptions : addTaskView.calendarOptions
         value: addTaskView.calendarId
         onChanged: function(v) { addTaskView.calendarId = v }
         onPopupOpenChanged: if (!popupOpen) addTaskView.restorePanelFocus()
@@ -3059,8 +3073,12 @@ Column {
     if (activeTab === "add") {
       addTaskView.beginAdd()
     } else {
+      // Close the shared calendar picker and move focus off its (now hidden)
+      // trigger, so keys on the overview are not routed to it.
+      if (addCalendarDropdown.popupOpen) addCalendarDropdown.close()
       if (addTaskView.editing) addTaskView.endEdit()
       addTaskView.releaseEditing()
+      Qt.callLater(tasksView.focusPanel)
     }
   }
 
