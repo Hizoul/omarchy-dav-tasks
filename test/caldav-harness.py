@@ -381,6 +381,35 @@ def run() -> int:
                     and "STATUS:NEEDS-ACTION" in edited_ics,
                     str((edited, edited_ics)),
                 )
+                personal_calendar = {"id": "personal", "name": "Personal", "color": "#000", "provider": "caldav", "host": "127.0.0.1", "source": "test"}
+                def session_for(calendar_id):
+                    if calendar_id == "personal":
+                        return (modules, None, None, personal_calendar, personal["href"], USER, PASSWORD)
+                    return (modules, None, None, task_calendar, work["href"], USER, PASSWORD)
+                mod.caldav_task_session = session_for
+                move_uid = "uid-move@test"
+                control(base, {"op": "put-task", "calendar": "work", "filename": move_uid, "uid": move_uid, "ics": (
+                    "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTODO\r\n"
+                    f"UID:{move_uid}\r\nSUMMARY:Move Me\r\nSTATUS:NEEDS-ACTION\r\n"
+                    "END:VTODO\r\nEND:VCALENDAR\r\n"
+                )})
+                moved = mod.move_task_caldav("work", "personal", move_uid, {"title": "Harness Task (moved)"})
+                moved_uid = moved.get("uid") or ""
+                moved_task = moved.get("task") or {}
+                old_status, _raw, _h = mod.caldav_http("GET", mod.caldav_task_resource(work["href"], move_uid), USER, PASSWORD, b"", {}, base_url=work["href"])
+                new_status, new_raw, _h = mod.caldav_http("GET", mod.caldav_task_resource(personal["href"], moved_uid), USER, PASSWORD, b"", {}, base_url=personal["href"])
+                check(
+                    "caldav move-task copies to the target calendar and removes the original",
+                    moved.get("ok") is True
+                    and moved_uid != move_uid
+                    and moved_task.get("calendarId") == "personal"
+                    and moved_task.get("title") == "Harness Task (moved)"
+                    and old_status == 404
+                    and new_status == 200
+                    and "SUMMARY:Harness Task (moved)" in new_raw.decode("utf-8", "replace")
+                    and f"UID:{moved_uid}" in new_raw.decode("utf-8", "replace"),
+                    str((moved, old_status, new_status)),
+                )
                 seeded_uid = "uid-invalid-dates@test"
                 # Filename mirrors the UID: Nextcloud names task resources by
                 # UID, which is what update_task_caldav's URL build assumes.

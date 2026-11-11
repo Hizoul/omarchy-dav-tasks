@@ -1290,7 +1290,7 @@ def caldav_vtodo_updated_document(text: str, title: str, due: datetime | None, d
 EDITABLE_TASK_FIELDS = ("title", "description", "due", "dtstart", "categories", "priority")
 
 
-def parse_task_edit_payload(raw: str) -> dict:
+def parse_task_edit_payload(raw: str, allow_empty: bool = False) -> dict:
     """Parse an edit-task payload read from stdin.
 
     Only keys present in the payload are changed; an empty string, empty list
@@ -1325,7 +1325,7 @@ def parse_task_edit_payload(raw: str) -> dict:
             edits["priority"] = max(0, min(9, int(payload.get("priority") or 0)))
         except (TypeError, ValueError):
             edits["priority"] = 0
-    if not edits:
+    if not edits and not allow_empty:
         raise ValueError("edit-task needs at least one field to change.")
     return edits
 
@@ -1451,6 +1451,73 @@ def edit_task_eds(calendar_id: str, uid: str, edits: dict) -> dict:
     task = component_task(component, calendar, modules, client)
     merge_cache_task(task)
     return {"ok": True, "provider": "evolution-data-server", "calendar": calendar, "task": task, "uid": uid}
+
+
+def retitle_vtodo_uid(document: str, uid: str) -> str:
+    """Give a serialized VTODO a new UID line (used when a task moves calendars)."""
+    return re.sub(r"(?m)^UID(?:;[^:\r\n]*)?:[^\r\n]*", f"UID:{uid}", document, count=1)
+
+
+def move_task_eds(calendar_id: str, dest_id: str, uid: str, edits: dict) -> dict:
+    """Copy a task into another EDS task list with `edits` applied, then delete the original."""
+    if not uid:
+        raise ValueError("edit-task requires --uid.")
+    modules, registry, source, client = eds_client_for_tasks(calendar_id)
+    if client.is_readonly():
+        raise ValueError(f"Calendar is read-only: {source.get_display_name()}")
+    ok, existing = client.get_object_sync(uid, None, None)
+    if not ok or existing is None:
+        raise ValueError(f"Task not found: {uid}")
+    dest_modules, dest_registry, dest_source, dest_client = eds_client_for_tasks(dest_id)
+    if dest_client.is_readonly():
+        raise ValueError(f"Calendar is read-only: {dest_source.get_display_name()}")
+    new_uid = f"omarchy-calendar-{uuid4()}"
+    document = retitle_vtodo_uid(vtodo_edited_document(existing.as_ical_string(), edits), new_uid)
+    updated = modules.ICalGLib.Component.new_from_string(document)
+    if not updated:
+        raise ValueError("Failed to build the moved task.")
+    ok, _created = dest_client.create_object_sync(updated, modules.ECal.OperationFlags.DISABLE_ITIP_MESSAGE, None)
+    if not ok:
+        raise ValueError("EDS create_object_sync returned false.")
+    delete_task_eds(calendar_id, uid)
+    calendar = source_calendar(dest_source, dest_registry, modules)
+    calendar["readonly"] = False
+    component = modules.ECal.Component.new_from_icalcomponent(updated.clone())
+    task = component_task(component, calendar, modules, dest_client)
+    merge_cache_task(task)
+    return {"ok": True, "provider": "evolution-data-server", "calendar": calendar, "task": task, "uid": new_uid, "fromUid": uid}
+
+
+def move_task_caldav(calendar_id: str, dest_id: str, uid: str, edits: dict) -> dict:
+    """Copy a CalDAV task into another collection with `edits` applied, then delete the original."""
+    if not uid:
+        raise ValueError("edit-task requires --uid.")
+    modules, registry, source, calendar, href, username, password = caldav_task_session(calendar_id)
+    resource = caldav_task_resource(href, uid)
+    status_code, raw, _headers = caldav_http("GET", resource, username, password, b"", {}, base_url=href)
+    if status_code != 200 or not raw:
+        raise ValueError(f"Task not found: {uid} (status {status_code}).")
+    _dest_modules, _dest_registry, _dest_source, dest_calendar, dest_href, dest_username, dest_password = caldav_task_session(dest_id)
+    new_uid = f"omarchy-calendar-{uuid4()}"
+    document = retitle_vtodo_uid(vtodo_edited_document(raw.decode("utf-8", "replace"), edits), new_uid)
+    status_code, body, _headers = caldav_http(
+        "PUT",
+        caldav_task_resource(dest_href, new_uid),
+        dest_username,
+        dest_password,
+        document.encode("utf-8"),
+        {"Content-Type": "text/calendar; charset=utf-8"},
+        base_url=dest_href,
+    )
+    if status_code not in (200, 201, 204):
+        detail = caldav_error_detail(body)
+        sync_log("task-move-failed", calendarId=dest_calendar["id"], uid=new_uid, status=status_code, detail=detail[:120])
+        suffix = f": {detail}" if detail else ""
+        raise ValueError(f"CalDAV task move failed with status {status_code}{suffix}.")
+    delete_task_caldav(calendar_id, uid)
+    task = caldav_component_task(caldav_component_from_text(document, modules), dest_calendar, new_uid)
+    merge_cache_task(task)
+    return {"ok": True, "provider": "caldav", "calendar": dest_calendar, "task": task, "uid": new_uid, "fromUid": uid}
 
 
 def caldav_component_from_text(text: str, modules: EdsModules):
@@ -3438,7 +3505,13 @@ def main(argv: list[str]) -> int:
                 raise ValueError("edit-task requires --uid.")
             if args.provider not in ("caldav", "eds", "evolution-data-server"):
                 raise ValueError("edit-task currently requires the evolution-data-server or caldav provider.")
-            edits = parse_task_edit_payload(read_stdin_limited(MAX_TASK_PAYLOAD_BYTES))
+            dest = str(args.to_calendar_id or "").strip()
+            moving = bool(dest) and dest != args.calendar_id
+            edits = parse_task_edit_payload(read_stdin_limited(MAX_TASK_PAYLOAD_BYTES), allow_empty=moving)
+            if moving and args.provider == "caldav":
+                return emit_json(move_task_caldav(args.calendar_id, dest, args.uid, edits))
+            if moving:
+                return emit_json(move_task_eds(args.calendar_id, dest, args.uid, edits))
             if args.provider == "caldav":
                 return emit_json(edit_task_caldav(args.calendar_id, args.uid, edits))
             return emit_json(edit_task_eds(args.calendar_id, args.uid, edits))

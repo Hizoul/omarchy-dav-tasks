@@ -439,10 +439,14 @@ Item {
     tasksEditProc.secret = JSON.stringify(payload)
     // onStarted closes stdin after writing, so re-open it for every run.
     tasksEditProc.stdinEnabled = true
+    // A calendar change is sent as --to-calendar-id; the helper copies the task
+    // there and deletes the original.
+    var toCalendarId = fields.calendarId !== undefined ? String(fields.calendarId) : ""
     tasksEditProc.command = [
       helperPath(), "edit-task",
       "--provider", calendarProviderById(task.calendarId),
       "--calendar-id", String(task.calendarId || defaultCalendarId()),
+      "--to-calendar-id", toCalendarId,
       "--uid", String(task.uid || "")
     ]
     tasksEditProc.running = true
@@ -453,6 +457,9 @@ Item {
     var payload = TaskModel.parseHelperResponse(text)
     if (exitCode === 0 && payload.ok) {
       if (payload.tasks && payload.tasks.length > 0) {
+        // A move gives the task a new UID: drop the original entry first.
+        var original = root.tasksPendingUpdateOriginal
+        if (original && original.uid !== payload.tasks[0].uid) removeTaskByUid(original.uid)
         mergeTask(payload.tasks[0])
         root.taskUpdated(payload.tasks[0])
       }
