@@ -35,7 +35,7 @@ Everything works without the mouse. Press `?` (or `F1`) in the panel for a searc
 | `Esc` | Back out one step, then close the panel |
 | `Tab` | Next field in forms, otherwise the next bar panel |
 
-In the new-task and edit form: `Tab` / `Shift+Tab` move between fields (the calendar list included), `Ctrl+Enter` creates or saves the task. Starts-by and due dates can be typed as `DD.MM.YYYY` (`Enter` or leaving the field checks them), and the button beside each field opens the picker. `Ctrl+D` opens the due-date picker and `Ctrl+T` the starts-by picker (`h j k l` move by day and week, `H` `L` by month, `t` today, `Enter` picks, `x` clears), `Ctrl+J` / `Ctrl+K` cycle calendars and `Ctrl+L` opens the calendar list. In Config: `Enter` toggles a calendar, `c` picks its color, `s` connects a server.
+In the new-task and edit form: `Tab` / `Shift+Tab` move between fields (the calendar list included), `Ctrl+Enter` creates or saves the task. Starts-by and due dates can be typed in your locale's short date format, shown as the field's placeholder (`Enter` or leaving the field checks them), and the button beside each field opens the picker. `Ctrl+D` opens the due-date picker and `Ctrl+T` the starts-by picker (`h j k l` move by day and week, `H` `L` by month, `t` today, `Enter` picks, `x` clears), `Ctrl+J` / `Ctrl+K` cycle calendars and `Ctrl+L` opens the calendar list. In Config: `Enter` toggles a calendar, `c` picks its color, `s` connects a server.
 
 To rebind, open `?`, highlight an action, press `Ctrl+E` and then the new key. `Ctrl+R` restores one default, `Ctrl+U` unbinds and `Ctrl+Shift+R` (twice) restores all. Bindings are stored in this widget's `shell.json` entry under `keyboardShortcuts`.
 

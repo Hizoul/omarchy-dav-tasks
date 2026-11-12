@@ -296,10 +296,11 @@ assert.equal(model.calendarDisplayColor(null, {}, 5), '#8aadf4')
 assert.equal(model.calendarDisplayColor({ id: 'c1' }, {}, -1), '#a6e3a1')
 
 console.log('ok - task model')
-// typed date input (always DD.MM.YYYY)
-const dePattern = model.DATE_INPUT_PATTERN
+// typed date input (the pattern comes from the user's locale)
+const dePattern = 'dd.MM.yyyy'
 const inputNow = new Date(2026, 4, 1)
-assert.equal(dePattern, 'dd.MM.yyyy')
+assert.equal(model.DATE_INPUT_PATTERN, 'yyyy-MM-dd')
+assert.equal(model.dateInputHint(model.DATE_INPUT_PATTERN), 'YYYY-MM-DD')
 assert.equal(model.dateInputHint(dePattern), 'DD.MM.YYYY')
 assert.equal(model.parseDateInput('5.6.2026', dePattern, inputNow), '2026-06-05')
 assert.equal(model.parseDateInput(' 05.06.26 ', dePattern, inputNow), '2026-06-05')
@@ -317,6 +318,12 @@ assert.equal(model.formatDateInput('', dePattern), '')
 for (const key of ['2026-06-05', '2028-02-29']) {
   assert.equal(model.parseDateInput(model.formatDateInput(key, dePattern), dePattern, inputNow), key)
 }
+// locale patterns from Qt's short format: two-digit years, unpadded fields, other orders
+for (const [pattern, text] of [['M/d/yy', '6/5/26'], ['dd/MM/yy', '05/06/26'], ['yyyy-MM-dd', '2026-06-05'], ['d. M. yyyy', '5. 6. 2026']]) {
+  assert.equal(model.formatDateInput('2026-06-05', pattern), text)
+  assert.equal(model.parseDateInput(text, pattern, inputNow), '2026-06-05')
+}
+assert.equal(model.parseDateInput('13/6/26', 'M/d/yy', inputNow), '')
 console.log('ok - typed date input')
 
 // packWideColumns

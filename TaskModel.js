@@ -227,9 +227,10 @@ function formatStartDate(task) {
 }
 
 // --- Typed date input -------------------------------------------------------
-// The due and starts-by fields take a date typed as DD.MM.YYYY, always, so the
-// same keys mean the same thing on every locale.
-var DATE_INPUT_PATTERN = 'dd.MM.yyyy'
+// The due and starts-by fields take a date in the user's locale (the shell passes
+// Qt's short date pattern in). This is only the fallback when none is given:
+// ISO order is unambiguous on every locale.
+var DATE_INPUT_PATTERN = 'yyyy-MM-dd'
 
 function padTwo(value) {
   var s = String(value)
