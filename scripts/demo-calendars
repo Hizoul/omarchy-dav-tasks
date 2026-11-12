@@ -228,7 +228,7 @@ def ensure_calendars():
                 stdin=json.dumps({"calendars": [{"id": existing["id"], "name": name, "color": color}]}),
             )
             continue
-        created = helper(["create-local-calendar", "--provider", PROVIDER, "--title", name])
+        created = helper(["create-local-calendar", "--provider", PROVIDER, "--title", name, "--tasks"])
         calendar_id = created["calendar"]["id"]
         helper(
             ["update-calendars", "--provider", PROVIDER],
@@ -285,6 +285,32 @@ def seed_events(ids):
     write_ics(ids["Home"], home)
 
 
+def seed_tasks(ids):
+    today = local_now().date()
+
+    def due(days):
+        return (today + timedelta(days=days)).isoformat()
+
+    samples = {
+        "Work": [
+            {"title": "Prepare sprint demo", "due": due(3), "priority": 1, "categories": ["Work"]},
+            {"title": "Review open pull requests", "due": due(1), "categories": ["Work"]},
+            {"title": "Update project roadmap", "due": due(10), "priority": 5, "categories": ["Work"]},
+        ],
+        "Personal": [
+            {"title": "Book dentist appointment", "due": due(5), "priority": 2, "categories": ["Personal"]},
+            {"title": "Buy birthday gift", "due": due(12), "categories": ["Personal"]},
+        ],
+        "Home": [
+            {"title": "Water the plants", "due": due(0), "categories": ["Home"]},
+            {"title": "Replace the water filter", "due": due(20), "categories": ["Home"]},
+        ],
+    }
+    for name, tasks in samples.items():
+        for task in tasks:
+            helper(["create-task", "--provider", PROVIDER, "--calendar-id", ids[name]], stdin=json.dumps(task))
+
+
 def wipe_demo_cache(ids):
     DATA.mkdir(parents=True, exist_ok=True)
     calendars = [{"id": ids[name], "name": name, "color": color, "provider": PROVIDER, "host": "", "source": "Evolution Data Server", "readonly": False} for name, color in DEMO]
@@ -330,6 +356,7 @@ def cmd_seed():
                     disabled.append(uid)
     ids = ensure_calendars()
     seed_events(ids)
+    seed_tasks(ids)
     wipe_demo_cache(ids)
     snapshot_window()
     save_state({"disabledCaldav": disabled, "demoCalendars": [ids[name] for name, _color in DEMO], "calendars": ids})
