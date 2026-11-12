@@ -30,6 +30,7 @@ def point_at(root: Path) -> None:
     demo.MANIFEST = demo.BACKUP / "manifest.json"
     demo.EVO_SOURCES = root / "evo-sources"
     demo.EVO_CALENDARS = root / "evo-calendars"
+    demo.EVO_TASKS = root / "evo-tasks"
     demo.registry = lambda: (FakeRegistry(), None)
     demo.adopt_legacy_backup = lambda: False
 
@@ -66,11 +67,16 @@ with tempfile.TemporaryDirectory() as tmp:
 
     # Simulate the demo run: the shell rewrites the task cache, the seed adds
     # cache.json, the log grows, and a demo calendar folder exists.
-    (demo.DATA / "cache.json").write_text("{}")
+    demo.wipe_demo_cache({"Work": "w", "Personal": "p", "Home": "h"})
+    if json.loads((demo.DATA / "tasks-cache.json").read_text())["tasks"] != []:
+        fail("demo seed left real tasks in the panel cache")
+    print("ok - demo seed clears the panel task cache")
     (demo.DATA / "sync.log").write_text("real log line\ndemo line\n")
     demo_uid = "omarchy-calendar-local-demo"
     (demo.EVO_CALENDARS / demo_uid).mkdir(parents=True)
     (demo.EVO_CALENDARS / demo_uid / "calendar.ics").write_text("BEGIN:VCALENDAR\n")
+    (demo.EVO_TASKS / demo_uid).mkdir(parents=True)
+    (demo.EVO_TASKS / demo_uid / "tasks.ics").write_text("BEGIN:VCALENDAR\n")
     demo.save_state({"disabledCaldav": [], "demoCalendars": [demo_uid], "calendars": {}})
 
     demo.cmd_restore()
@@ -81,8 +87,8 @@ with tempfile.TemporaryDirectory() as tmp:
         fail("restore did not put back the real sync log")
     if (demo.DATA / "cache.json").exists() or (demo.DATA / "reminders.json").exists():
         fail("restore left demo-only files in place")
-    if (demo.EVO_CALENDARS / demo_uid).exists():
-        fail("restore left the demo calendar folder")
+    if (demo.EVO_CALENDARS / demo_uid).exists() or (demo.EVO_TASKS / demo_uid).exists():
+        fail("restore left the demo calendar or task folder")
     if demo.STATE.exists() or demo.MANIFEST.exists():
         fail("restore did not clear demo state")
     print("ok - restore puts back real files and removes demo leftovers")

@@ -24,6 +24,7 @@ FILES = ("cache.json", "tasks-cache.json", "reminders.json", "sync.log")
 MANIFEST = BACKUP / "manifest.json"
 EVO_SOURCES = Path.home() / ".config/evolution/sources"
 EVO_CALENDARS = Path.home() / ".local/share/evolution/calendar"
+EVO_TASKS = Path.home() / ".local/share/evolution/tasks"
 
 DEMO = [
     ("Work", "#89b4fa"),
@@ -323,6 +324,16 @@ def wipe_demo_cache(ids):
         "localTouches": {},
         "rev": 1,
     }) + "\n")
+    # The panel reads its tasks from tasks-cache.json and keeps entries from
+    # disabled CalDAV sources, so clear the real tasks here. The demo tasks come
+    # from the sync after the shell restarts. Restore puts the real file back.
+    (DATA / "tasks-cache.json").write_text(json.dumps({
+        "ok": True,
+        "provider": PROVIDER,
+        "tasks": [],
+        "cachedAt": datetime.now(ZoneInfo("UTC")).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "rev": 1,
+    }) + "\n")
 
 
 def snapshot_window():
@@ -373,6 +384,7 @@ def cmd_restore():
     for uid in state.get("demoCalendars") or []:
         remove_source(reg, uid)
         shutil.rmtree(EVO_CALENDARS / uid, ignore_errors=True)
+        shutil.rmtree(EVO_TASKS / uid, ignore_errors=True)
     for uid in state.get("disabledCaldav") or []:
         set_enabled(reg, uid, True)
     restore_files()
