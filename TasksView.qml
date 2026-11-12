@@ -217,6 +217,19 @@ Column {
     return sections.length > 0 ? sections[Math.max(0, Math.min(cursorSection, sections.length - 1))] : null
   }
 
+  // Wide view: the card under the keyboard cursor. Columns are not part of the
+  // list model, so walk the wide block's item tree (flickable content included).
+  function wideCursorItem(node) {
+    if (!node) return null
+    if (node.cursor === true && node.toggleExpanded) return node
+    var kids = node.children || []
+    for (var i = 0; i < kids.length; i++) {
+      var found = wideCursorItem(kids[i])
+      if (found) return found
+    }
+    return wideCursorItem(node.contentItem)
+  }
+
   function currentItem() {
     var section = currentSection()
     return section ? section.rowItem(cursorRow) : null
@@ -402,6 +415,11 @@ Column {
     case "pageNext": movePage(1); return true
     case "filter": openFilter(); return true
     case "toggleExpand":
+      if (wideActive) {
+        item = wideCursorItem(wideBlock)
+        if (item) item.toggleExpanded()
+        return true
+      }
       item = currentItem()
       if (item) item.toggleExpanded()
       return true
