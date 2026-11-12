@@ -786,33 +786,20 @@ Column {
     function repack() {
       if (section === null) return
       if (!tasksView.wideMode) { section.widePageRows = []; return }
-      var tasks = sectionTasks
-      var budget = tasksView.wideAvailableHeight - tasksView.wideHeaderHeight + Style.space(4)
-      var cap = section.maxWidePages
-      var out = []
-      var page = []
-      var used = 0
-      var unmeasured = false
-      for (var i = 0; i < tasks.length; i++) {
-        if (i >= measureRepeater.count) { unmeasured = true; break }
+      var heights = []
+      for (var i = 0; i < measureRepeater.count; i++) {
         var item = measureRepeater.itemAt(i)
-        if (!item || item.height <= 0) return // not laid out yet; repacks on height
-        var cost = item.height + Style.space(4)
-        if (page.length > 0 && used + cost > budget) {
-          out.push(page)
-          page = []
-          used = 0
-          if (out.length >= cap) break
-        }
-        page.push(tasks[i])
-        used += cost
+        heights.push(item ? item.height : 0)
       }
-      if (unmeasured && out.length < cap && measureLimit < tasks.length) {
-        measureLimit = Math.min(tasks.length, measureLimit * 2)
+      var budget = tasksView.wideAvailableHeight - tasksView.wideHeaderHeight + Style.space(4)
+      var result = TaskModel.packWideColumns(sectionTasks, heights, budget, Style.space(4),
+                                             section.maxWidePages, measureLimit < sectionTasks.length)
+      if (result.status === 'pending') return // not laid out yet; repacks on height
+      if (result.status === 'grow') {
+        measureLimit = Math.min(sectionTasks.length, measureLimit * 2)
         return
       }
-      if (page.length > 0 && out.length < cap) out.push(page)
-      section.widePageRows = out
+      section.widePageRows = result.pages
     }
     onPackKeyChanged: {
       measureLimit = initialLimit()

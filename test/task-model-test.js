@@ -318,3 +318,18 @@ for (const key of ['2026-06-05', '2028-02-29']) {
   assert.equal(model.parseDateInput(model.formatDateInput(key, dePattern), dePattern, inputNow), key)
 }
 console.log('ok - typed date input')
+
+// packWideColumns
+const [a, b, c] = ['a', 'b', 'c']
+assert.deepEqual(model.packWideColumns([], [], 100, 4, 5, false), { status: 'ok', pages: [] })
+assert.deepEqual(model.packWideColumns([a, b, c], [10, 10, 10], 100, 4, 5, false), { status: 'ok', pages: [[a, b, c]] })
+// 44px per 40px row with a 100px budget: two rows per column
+assert.deepEqual(model.packWideColumns([a, b, c], [40, 40, 40], 100, 4, 5, false), { status: 'ok', pages: [[a, b], [c]] })
+// the column cap stops packing early and drops the overflow
+assert.deepEqual(model.packWideColumns([a, b, c], [40, 40, 40], 100, 4, 1, false), { status: 'ok', pages: [[a, b]] })
+// an unlaid-out measured row waits for the next height change
+assert.deepEqual(model.packWideColumns([a, b], [10, 0], 100, 4, 5, true), { status: 'pending' })
+// unmeasured rows ask for more measuring while there is room to grow
+assert.deepEqual(model.packWideColumns([a, b, c], [10], 100, 4, 5, true), { status: 'grow' })
+assert.deepEqual(model.packWideColumns([a, b, c], [10], 100, 4, 5, false), { status: 'ok', pages: [[a]] })
+console.log('ok - wide column packing')

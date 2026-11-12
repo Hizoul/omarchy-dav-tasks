@@ -389,6 +389,39 @@ function calendarChoiceLabel(calendar, names) {
   return calendarDisplayName(calendar, names) + ' · ' + providerLabel(calendar.provider, calendar.host)
 }
 
+// Packs measured rows into wide-view columns of at most `budget` pixels, with
+// `gap` pixels between rows. heights[i] is the rendered height of tasks[i];
+// heights can be shorter than tasks while later rows are still unmeasured.
+// Returns { status: 'pending' } while a measured row has not laid out yet,
+// { status: 'grow' } when more rows must be measured to fill the columns, or
+// { status: 'ok', pages } with at most `cap` columns.
+function packWideColumns(tasks, heights, budget, gap, cap, canGrow) {
+  var out = []
+  var page = []
+  var used = 0
+  var unmeasured = false
+  for (var i = 0; i < tasks.length; i++) {
+    if (i >= heights.length) {
+      unmeasured = true
+      break
+    }
+    var height = heights[i]
+    if (!(height > 0)) return { status: 'pending' }
+    var cost = height + gap
+    if (page.length > 0 && used + cost > budget) {
+      out.push(page)
+      page = []
+      used = 0
+      if (out.length >= cap) break
+    }
+    page.push(tasks[i])
+    used += cost
+  }
+  if (unmeasured && out.length < cap && canGrow) return { status: 'grow' }
+  if (page.length > 0 && out.length < cap) out.push(page)
+  return { status: 'ok', pages: out }
+}
+
 if (typeof module !== 'undefined') module.exports = {
   isCompleted,
   isOverdue,
@@ -404,6 +437,7 @@ if (typeof module !== 'undefined') module.exports = {
   normalizeTasks,
   normalizedTask,
   filterTasks,
+  packWideColumns,
   parseHelperResponse,
   formatDueDate,
   formatStartDate,
