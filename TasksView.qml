@@ -2617,7 +2617,7 @@ Column {
     property bool duePickerOpen: false
     property string createError: ""
     // The user's short date order, from the shell locale (e.g. dd.MM.yy, M/d/yy).
-    readonly property string datePattern: Qt.locale(Commons.I18n.formatLocale).dateFormat(Locale.ShortFormat) || TaskModel.DATE_INPUT_PATTERN
+    readonly property string datePattern: Qt.locale(I18n.formatLocale).dateFormat(Locale.ShortFormat) || TaskModel.DATE_INPUT_PATTERN
     // Drafts of creates that were submitted and not yet confirmed, oldest
     // first. The service confirms creates in the same order.
     property var inFlightCreates: []
