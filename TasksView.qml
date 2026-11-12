@@ -50,11 +50,21 @@ Column {
   property var viewport: null
   readonly property real wideColumnWidth: Style.space(350)
   readonly property real wideHeaderHeight: wideHeaderProbe.implicitHeight + Style.space(4) + 1
+  readonly property bool wideActive: wideMode && activeTab === "pending"
+  readonly property real wideRowPitch: wideRowProbe.height + Style.space(4)
+  readonly property real wideColumnPitch: wideColumnWidth + Style.space(12)
+  function wideColumnsOf(section) { return section.tasks.length === 0 ? 1 : section.pageCount }
+  // Done columns that still fit after Upcoming and Backlog. Columns plus two
+  // 1px dividers and 12px of gap come to N * pitch + 14 in total.
+  readonly property int wideDoneFit: wideActive && doneSection.tasks.length > 0
+    ? Math.max(0, Math.floor((wideStrip.width - 14) / wideColumnPitch) - wideColumnsOf(upcomingSection) - wideColumnsOf(backlogSection))
+    : 0
   readonly property real wideAvailableHeight: viewport
     ? Math.max(0, viewport.height - tasksView.mapToItem(viewport.contentItem, 0, 0).y - pendingColumn.y)
     : 0
 
-  readonly property var navSections: activeTab === "pending" ? [upcomingSection, backlogSection]
+  readonly property var navSections: activeTab === "pending"
+    ? (wideDoneFit > 0 ? [upcomingSection, backlogSection, doneSection] : [upcomingSection, backlogSection])
     : activeTab === "done" ? [doneSection] : []
 
   // Text fields consume some Ctrl chords themselves (Ctrl+D deletes, Ctrl+K
@@ -144,6 +154,7 @@ Column {
     wideMode = on
     upcomingSection.page = 1
     backlogSection.page = 1
+    doneSection.page = 1
     resetCursor()
     scheduleReveal()
   }
@@ -151,9 +162,9 @@ Column {
   // Scroll the wide strip so the cursor's page column is fully visible.
   function revealWide() {
     var section = currentSection()
-    if (activeTab !== "pending" || (section !== upcomingSection && section !== backlogSection)) return
-    if (section.tasks.length === 0) return
-    var block = section === upcomingSection ? wideUpcoming : wideBacklog
+    if (!wideActive || !section || section.tasks.length === 0) return
+    var block = section === upcomingSection ? wideUpcoming : section === backlogSection ? wideBacklog : section === doneSection ? wideDone : null
+    if (!block) return
     var column = block.pageItem(section.currentPage - 1)
     if (!column) return
     var left = column.mapToItem(wideStrip.contentItem, 0, 0).x
@@ -487,11 +498,11 @@ Column {
     // slicing; the Repeater renders only the current page.
     property int pageSize: 5
     property int page: 1
-    readonly property int pageCount: tasksView.wideMode ? Math.max(1, widePageRows.length) : Math.max(1, Math.ceil(tasks.length / pageSize))
+    readonly property int pageCount: tasksView.wideActive ? Math.max(1, Math.min(widePageRows.length, maxWidePages)) : Math.max(1, Math.ceil(tasks.length / pageSize))
     // Clamped read-only view of `page`, so a shrunken list can never drive
     // the slice or the pager label out of range.
     readonly property int currentPage: Math.min(Math.max(page, 1), pageCount)
-    readonly property var pageTasks: tasksView.wideMode ? (widePageRows[currentPage - 1] || []) : tasks.slice((currentPage - 1) * pageSize, currentPage * pageSize)
+    readonly property var pageTasks: tasksView.wideActive ? (widePageRows[currentPage - 1] || []) : tasks.slice((currentPage - 1) * pageSize, currentPage * pageSize)
     // Exactly pageSize slots whenever the section is populated: real tasks
     // for the first pageTasks.length entries, null fillers after. The
     // Repeater therefore always lays out a full page, so a short list can
@@ -500,6 +511,8 @@ Column {
     // cross-item measurements that could defer or latch.
     // Wide view: rows packed into columns by measured height (see WidePages).
     property var widePageRows: []
+    // Wide view: caps how many packed pages are used (Done shows only what fits).
+    property int maxWidePages: 1000000
     onWidePageRowsChanged: Qt.callLater(tasksView.clampCursor)
     // Keyboard cursor sits on this row of the given page.
     function cursorOn(p, row) {
@@ -701,16 +714,163 @@ Column {
       color: Color.accent
     }
   }
+  // Estimated height of one wide row, without building a TaskItem: the title is
+  // wrapped at the width the row leaves for it, and each extra title line adds
+  // one line height to the single-line row. Bold is assumed (the wider case),
+  // so the estimate errs tall rather than clipping.
+  component WideRowMeasure: Item {
+    id: measure
+    property var task: null
+    property string dateLabel: "due"
+    readonly property string createdString: {
+      if (!task) return ""
+      var d = TaskModel.parseDateTime(task.created)
+      if (!d) return ""
+      var month = TaskModel.SHORT_MONTH_NAMES[d.getMonth()]
+      var day = d.getDate()
+      var year = d.getFullYear()
+      if (year === new Date().getFullYear()) return month + " " + day
+      return month + " " + day + ", " + year
+    }
+    readonly property string dateString: {
+      if (!task) return ""
+      if (dateLabel === "completed") return TaskModel.formatCompletedDate(task)
+      if (dateLabel === "created") return createdString
+      return TaskModel.formatDueDate(task)
+    }
+    width: tasksView.wideColumnWidth
+    height: wideRowProbe.height + Math.max(0, titleM.lineCount - 1) * tasksView.wideLineHeight
+    Text {
+      id: dateM
+      text: measure.dateString
+      font.family: Style.font.family
+      font.pixelSize: Style.font.caption
+      textFormat: Text.PlainText
+      opacity: 0
+    }
+    Text {
+      id: titleM
+      width: Math.max(1, tasksView.wideColumnWidth - Style.space(16) - Style.space(12) - tasksView.wideStatusWidth - dateM.implicitWidth)
+      text: measure.task ? TaskModel.plainDisplay(measure.task.title, 200) : ""
+      wrapMode: Text.WordWrap
+      font.family: Style.font.family
+      font.pixelSize: Style.font.bodySmall
+      font.bold: true
+      textFormat: Text.PlainText
+      opacity: 0
+    }
+  }
   // One section in the wide view: a column per page, each filled to the rows
-  // that fit the height. Empty sections show their empty text instead.
-  component WidePages: Row {
+  // that fit the height. Empty sections show their empty text instead. Rows are
+  // measured off-screen, only as many as the visible columns can use (see
+  // measureLimit), and packed once per change rather than on every height.
+  component WidePages: Item {
     id: widePages
     property var section: null
-    spacing: Style.space(12)
+    readonly property var sectionTasks: section !== null ? section.tasks : []
+    // Tasks rendered for measuring. A capped section (Done) starts with enough
+    // for the columns that fit and doubles only if packing comes up short.
+    property int measureLimit: 0
+    readonly property int rowsPerColumn: Math.max(1, Math.floor((tasksView.wideAvailableHeight - tasksView.wideHeaderHeight + Style.space(4)) / Math.max(1, tasksView.wideRowPitch)))
+    readonly property var packKey: [tasksView.wideMode, tasksView.wideAvailableHeight, sectionTasks, section !== null ? section.maxWidePages : 0]
+    width: pageRow.width
+    height: pageRow.height
     function pageItem(index) { return pageRepeater.itemAt(index) }
-    // Real row heights: every task is rendered once, off-screen, at column
-    // width. Its height is read back and the rows are packed into columns by
-    // how much height they take, so wrapped titles are counted.
+    function initialLimit() {
+      if (section === null) return 0
+      var total = sectionTasks.length
+      if (section.maxWidePages >= 1000000) return total
+      return Math.min(total, Math.max(10, section.maxWidePages * rowsPerColumn * 2))
+    }
+    function scheduleRepack() { repackTimer.restart() }
+    function repack() {
+      if (section === null) return
+      if (!tasksView.wideMode) { section.widePageRows = []; return }
+      var tasks = sectionTasks
+      var budget = tasksView.wideAvailableHeight - tasksView.wideHeaderHeight + Style.space(4)
+      var cap = section.maxWidePages
+      var out = []
+      var page = []
+      var used = 0
+      var unmeasured = false
+      for (var i = 0; i < tasks.length; i++) {
+        if (i >= measureRepeater.count) { unmeasured = true; break }
+        var item = measureRepeater.itemAt(i)
+        if (!item || item.height <= 0) return // not laid out yet; repacks on height
+        var cost = item.height + Style.space(4)
+        if (page.length > 0 && used + cost > budget) {
+          out.push(page)
+          page = []
+          used = 0
+          if (out.length >= cap) break
+        }
+        page.push(tasks[i])
+        used += cost
+      }
+      if (unmeasured && out.length < cap && measureLimit < tasks.length) {
+        measureLimit = Math.min(tasks.length, measureLimit * 2)
+        return
+      }
+      if (page.length > 0 && out.length < cap) out.push(page)
+      section.widePageRows = out
+    }
+    onPackKeyChanged: {
+      measureLimit = initialLimit()
+      scheduleRepack()
+    }
+    Component.onCompleted: {
+      measureLimit = initialLimit()
+      scheduleRepack()
+    }
+    Timer {
+      id: repackTimer
+      interval: 0
+      onTriggered: widePages.repack()
+    }
+    Row {
+      id: pageRow
+      spacing: Style.space(12)
+      Column {
+        visible: widePages.section !== null && widePages.sectionTasks.length === 0
+        width: tasksView.wideColumnWidth
+        spacing: Style.space(4)
+        WideHeader { label: widePages.section ? widePages.section.title : "" }
+        Text {
+          width: parent.width
+          text: widePages.section ? widePages.section.emptyText : ""
+          color: Color.muted
+          font.family: Style.font.family
+          font.pixelSize: Style.font.bodySmall
+          textFormat: Text.PlainText
+          wrapMode: Text.WordWrap
+        }
+      }
+      Repeater {
+        id: pageRepeater
+        model: widePages.section !== null && widePages.sectionTasks.length > 0 ? widePages.section.pageCount : 0
+        Column {
+          id: pageColumn
+          required property int index
+          width: tasksView.wideColumnWidth
+          spacing: Style.space(4)
+          WideHeader { label: widePages.section.title + " " + (pageColumn.index + 1) + "/" + widePages.section.pageCount }
+          Repeater {
+            model: widePages.section.widePageRows[pageColumn.index] || []
+            TaskItem {
+              required property var modelData
+              required property int index
+              cursor: widePages.section.cursorOn(pageColumn.index + 1, index)
+              width: tasksView.wideColumnWidth
+              task: modelData
+              showOverdue: widePages.section.showOverdue
+              dateLabel: widePages.section.dateLabel
+            }
+          }
+        }
+      }
+    }
+    // Off-screen copy used only to read real row heights (wrapped titles
+    // included). Zero-sized and clipped, so it takes no room in the layout.
     Item {
       width: 0
       height: 0
@@ -720,82 +880,12 @@ Column {
         width: tasksView.wideColumnWidth
         Repeater {
           id: measureRepeater
-          model: tasksView.wideMode && widePages.section !== null ? widePages.section.tasks : []
-          TaskItem {
+          model: tasksView.wideMode && widePages.section !== null ? widePages.sectionTasks.slice(0, widePages.measureLimit) : []
+          WideRowMeasure {
             required property var modelData
-            width: tasksView.wideColumnWidth
             task: modelData
-            showOverdue: widePages.section.showOverdue
             dateLabel: widePages.section.dateLabel
-          }
-        }
-      }
-    }
-    readonly property var rowHeights: {
-      var out = []
-      var count = measureRepeater.count
-      for (var i = 0; i < count; i++) {
-        var item = measureRepeater.itemAt(i)
-        out.push(item ? item.height : 0)
-      }
-      return out
-    }
-    readonly property var packedRows: {
-      var out = []
-      if (!tasksView.wideMode || widePages.section === null) return out
-      var tasks = widePages.section.tasks
-      var budget = tasksView.wideAvailableHeight - tasksView.wideHeaderHeight + Style.space(4)
-      var page = []
-      var used = 0
-      for (var i = 0; i < tasks.length; i++) {
-        var cost = (rowHeights[i] || 0) + Style.space(4)
-        if (page.length > 0 && used + cost > budget) { out.push(page); page = []; used = 0 }
-        page.push(tasks[i])
-        used += cost
-      }
-      if (page.length > 0) out.push(page)
-      return out
-    }
-    Binding {
-      when: widePages.section !== null
-      target: widePages.section
-      property: "widePageRows"
-      value: widePages.packedRows
-    }
-    Column {
-      visible: widePages.section !== null && widePages.section.tasks.length === 0
-      width: tasksView.wideColumnWidth
-      spacing: Style.space(4)
-      WideHeader { label: widePages.section ? widePages.section.title : "" }
-      Text {
-        width: parent.width
-        text: widePages.section ? widePages.section.emptyText : ""
-        color: Color.muted
-        font.family: Style.font.family
-        font.pixelSize: Style.font.bodySmall
-        textFormat: Text.PlainText
-        wrapMode: Text.WordWrap
-      }
-    }
-    Repeater {
-      id: pageRepeater
-      model: widePages.section !== null && widePages.section.tasks.length > 0 ? widePages.section.pageCount : 0
-      Column {
-        id: pageColumn
-        required property int index
-        width: tasksView.wideColumnWidth
-        spacing: Style.space(4)
-        WideHeader { label: widePages.section.title + " " + (pageColumn.index + 1) + "/" + widePages.section.pageCount }
-        Repeater {
-          model: widePages.section.widePageRows[pageColumn.index] || []
-          TaskItem {
-            required property var modelData
-            required property int index
-            cursor: widePages.section.cursorOn(pageColumn.index + 1, index)
-            width: tasksView.wideColumnWidth
-            task: modelData
-            showOverdue: widePages.section.showOverdue
-            dateLabel: widePages.section.dateLabel
+            onHeightChanged: widePages.scheduleRepack()
           }
         }
       }
@@ -2034,6 +2124,35 @@ Column {
     font.pixelSize: Style.font.body
     font.bold: true
   }
+  // Invisible measurements for the wide row estimate: one line of body text
+  // (its height is the line height) and the status glyph (its width).
+  Text {
+    id: wideLineProbe
+    visible: false
+    text: "A\nA"
+    font.family: Style.font.family
+    font.pixelSize: Style.font.bodySmall
+    textFormat: Text.PlainText
+  }
+  Text {
+    id: wideStatusProbe
+    visible: false
+    text: "\u2713\u25CB"
+    font.family: Style.font.family
+    font.pixelSize: Style.font.bodySmall
+    textFormat: Text.PlainText
+  }
+  readonly property real wideLineHeight: wideLineProbe.contentHeight / 2
+  // Both glyphs side by side: an upper bound, so the title never gets too wide.
+  readonly property real wideStatusWidth: wideStatusProbe.implicitWidth
+  // Invisible measurement of one collapsed row (its height gives the row pitch).
+  TaskItem {
+    id: wideRowProbe
+    visible: false
+    width: tasksView.wideColumnWidth
+    task: ({ id: "", title: "Row", calendarName: "Calendar", status: "NEEDS-ACTION" })
+    dateLabel: "due"
+  }
   // Pending tab content
   Column {
     id: pendingColumn
@@ -2095,6 +2214,17 @@ Column {
           id: wideBacklog
           section: backlogSection
         }
+        Rectangle {
+          width: 1
+          height: wideRow.height
+          color: Color.muted
+          visible: tasksView.wideDoneFit > 0
+        }
+        WidePages {
+          id: wideDone
+          section: doneSection
+          visible: tasksView.wideDoneFit > 0
+        }
       }
     }
   }
@@ -2112,6 +2242,7 @@ Column {
       // Roomier page: the done tab stacks one section, so 10 rows (~430px)
       // still fits the fixed panel height where two 5-row sections do.
       pageSize: 10
+      maxWidePages: tasksView.wideDoneFit
       emptyText: tasksView.filterActive ? "No matching tasks" : "No completed tasks"
       dateLabel: "completed"
       showOverdue: false
