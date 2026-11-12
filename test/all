@@ -11,5 +11,6 @@ python3 "$ROOT/test/caldav-harness.py"
 bash "$ROOT/test/write-test.sh"
 node "$ROOT/test/task-model-test.js"
 node "$ROOT/test/keybindings-test.js"
+python3 "$ROOT/test/demo-calendars-test.py"
 
 echo "ok - all tests"
